@@ -79,6 +79,18 @@ outputs:
   identity:
     description: The environment's identity, e.g. `pr-482`. Empty when nothing was deployed.
     value: ${{ steps.deploy.outputs.identity }}
+  outputs:
+    description: >-
+      Every root output your definition declares, as one compact JSON object — pick what a
+      post-apply step needs with `fromJSON(steps.<id>.outputs.outputs).<name>`. Values are
+      verbatim (a string stays a string, an object stays an object). An output you mark
+      `sensitive` is omitted and named in the run log — a step output is one echo from a log,
+      so skyhook honors your marking rather than handing it on. Empty on a fork skip and on a
+      failure (parse only on success); `{}` when your definition declares no outputs; and, if
+      the document is too large for the output channel, a small object with a single
+      `__skyhook_truncated` key you can branch on. `url` is still handed back on its own output
+      above and is the only one recorded.
+    value: ${{ steps.deploy.outputs.outputs }}
   skyhook-seconds:
     description: >-
       Skyhook's own share of the run in seconds. The budget it is held to is 60. Two things

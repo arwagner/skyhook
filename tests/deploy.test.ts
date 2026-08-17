@@ -363,7 +363,12 @@ test('feat-002/AC-13 a definition that declares no address still deploys, and sa
   // scope — so a missing output is reported, never fatal.
   const { ports, registry } = harness({
     deployer: new FakeDeployer({
-      outcome: { ok: true, url: null, timing: { preparationMs: 0, initMs: 0, applyMs: 0 } },
+      outcome: {
+        ok: true,
+        url: null,
+        outputs: { document: {}, omittedSensitive: [] },
+        timing: { preparationMs: 0, initMs: 0, applyMs: 0 },
+      },
     }),
   });
 
@@ -402,6 +407,7 @@ test("feat-002/AC-14 skyhook's own share excludes both of the repository's steps
     outcome: {
       ok: true,
       url: 'https://example.test',
+      outputs: { document: { url: 'https://example.test' }, omittedSensitive: [] },
       timing: { preparationMs: 300, initMs: 8_000, applyMs: 5_000 },
     },
   });
@@ -726,4 +732,30 @@ test('feat-002/AC-23 recorded values follow the apply exactly as the commit does
     { image_tag: 'abc123', speech_image: 'ecr/speech:1' },
     'the values are untouched with it',
   );
+});
+
+// --- every output rides the result to the caller (chg-008) --------------------
+
+test('feat-002/AC-24 the deploy result carries the outputs document through untouched', async () => {
+  const deployer = new FakeDeployer({
+    outcome: {
+      ok: true,
+      url: 'https://pr-482.example',
+      outputs: {
+        document: { url: 'https://pr-482.example', web_bucket: 'b', cdn: { id: 'E1' } },
+        omittedSensitive: ['db_password'],
+      },
+      timing: { preparationMs: 0, initMs: 0, applyMs: 0 },
+    },
+  });
+  const { ports } = harness({ deployer });
+  const result = await deployEnvironment(ports);
+  assert.equal(result.kind, 'deployed');
+  if (result.kind !== 'deployed') return;
+  assert.deepEqual(result.outputs?.document, {
+    url: 'https://pr-482.example',
+    web_bucket: 'b',
+    cdn: { id: 'E1' },
+  });
+  assert.deepEqual(result.outputs?.omittedSensitive, ['db_password']);
 });

@@ -101,6 +101,28 @@ declares no such output still deploys, and the run says the address is unknown.
 of the run, and the calling workflow decides what to do with it. Skyhook asks for no permission to
 comment and owns no comment format.
 
+**Every output the definition declares is handed back, and skyhook decides nothing about them**
+(`chg-008`). A deploy is often not finished when the apply is — a workflow may still ship assets
+into a bucket the environment owns, or invalidate a distribution it created — and the identifiers
+those steps need are outputs of the definition just applied. The run exposes every root output as
+one compact JSON document, name to value, values verbatim (a string stays a string, an object
+stays an object); the calling workflow picks what it needs. This is the URL's philosophy
+generalized: skyhook reads and hands back, owns no format beyond Terraform's own, and still writes
+nothing to the pull request. This is a new exposure channel, stated plainly rather than dressed as
+a generalization: until now the only output that left skyhook's process was the `url` string, and
+the deploy role never leaves skyhook (it is assumed and used inside the run, never handed to the
+workflow), so a later step could not read these values for itself. An output the definition marks
+**sensitive** is omitted from the document and named as omitted in the run's log — the definition
+author's own judgment honored, not a boundary skyhook enforces: definition author and workflow
+author are one trust domain, so a value left unmarked is exposed verbatim, and skyhook does not
+overrule the marking. Two consequences the author owns: a value carrying a secret must be marked
+`sensitive` or it reaches the log, which on a public repository is world-readable; and because the
+flag is per-output, a compound object mixing a secret field with public ones must be split, since
+marking the whole thing sensitive omits the public fields and leaving it unmarked leaks the
+secret. A workflow that truly needs a sensitive value reads it from Terraform in its own steps, on
+its own responsibility. The registry is untouched: `url` remains the only output recorded, and the
+handed-back document lives exactly as long as the run.
+
 - **Scenario: a pull request gets an environment**
   - Given a repository where skyhook is installed and its deploy role has been applied
   - When a pull request is opened
@@ -188,6 +210,14 @@ comment and owns no comment format.
   - When the deploy runs
   - Then it is refused before the claim, naming the missing variable — no record is written,
     nothing is applied, and no default silently deploys in the value's place
+
+- **Scenario: the workflow finishes the deploy with the environment's own identifiers**
+  - Given a definition whose outputs include `url`, `web_bucket`, and a `cdn` object, and a
+    workflow with a post-apply step that syncs assets to the bucket
+  - When a pull request deploys successfully
+  - Then the run's `outputs` value parses as JSON and holds all three under their own names, the
+    post-apply step reads `web_bucket` from it without re-deriving anything, and `url` is also
+    still handed back on its own output and recorded, exactly as before
 
 ## Acceptance criteria
 - [ ] AC-1: A pull request opened on an installed repository results in an environment whose
@@ -296,6 +326,31 @@ comment and owns no comment format.
       successful apply, both are updated together to that deploy's values; a failed apply leaves
       both unchanged. An environment's record therefore names the commit and the artifacts of the
       last deploy that landed, or none if none has. (Added by `chg-007`.)
+- [ ] AC-24: After a successful apply, the run exposes one `outputs` value to the calling
+      workflow: a compact, single-line JSON document of every root output the definition declares,
+      names to values, values verbatim, except outputs the definition marks sensitive — those are
+      omitted and the run's log names each omitted output. A definition with no outputs yields
+      `{}`; a skipped run and a failed run yield the empty string, so a workflow parses `outputs`
+      only on a successful deploy. Nothing from it is recorded in the registry, and skyhook
+      declares no new permission. `url`'s own output and its recording (AC-13, AC-15) are
+      unchanged, and no new Terraform invocation is added, so the budget (AC-14) is unaffected.
+      (Added by `chg-008`.)
+- [ ] AC-25: No output value skyhook writes to `GITHUB_OUTPUT` can inject a further output. The
+      delimiter framing a value is generated fresh per write from a cryptographic random source
+      (at least 128 bits), never derived from the value, its length, or its name, so a crafted
+      value cannot reproduce its own closing marker; on the astronomically unlikely collision the
+      write fails loudly rather than emitting an unsafe frame. This governs every value skyhook
+      writes, `url` included — the weakness predated this change. The unfiltered
+      `terraform output -json` result, which carries sensitive values in the clear, is never
+      logged, written, or placed in an error, on every path including a parse failure and a
+      non-zero exit. (Added by `chg-008`.)
+- [ ] AC-26: A document approaching what the output channel can carry (GitHub caps one value at
+      roughly 1 MB) is replaced by a valid JSON object holding a single reserved key
+      (`__skyhook_truncated`, which no Terraform output can collide with) whose value names the
+      reason and omitted size but embeds no output content; the run emits a workflow warning
+      annotation as well as a log line, and the deploy result stays `deployed`. The size check
+      runs on the compact document after sensitive outputs are omitted, so nothing it measures or
+      reports can reopen the disclosure AC-25 closes. (Added by `chg-008`.)
 
 ## Known sharp edges (prototype)
 - **Nothing tears these environments down.** Teardown on close and the scheduled sweep are separate

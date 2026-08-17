@@ -156,11 +156,24 @@ export interface DeployTiming {
   readonly applyMs: number;
 }
 
+/**
+ * Every root output the definition declares, handed to the calling workflow (chg-008,
+ * AC-24). `document` is the non-sensitive outputs, names to verbatim values (a string
+ * stays a string, an object stays an object). `omittedSensitive` names the outputs the
+ * definition marked sensitive, so the caller can log the omission — never their values.
+ */
+export interface DeployOutputs {
+  readonly document: Readonly<Record<string, unknown>>;
+  readonly omittedSensitive: readonly string[];
+}
+
 export type DeployOutcome =
   | {
       readonly ok: true;
       /** Where the environment is, or null when the definition names no address. */
       readonly url: string | null;
+      /** Every output the definition declares. Null when the outputs could not be read. */
+      readonly outputs: DeployOutputs | null;
       readonly timing: DeployTiming;
     }
   | {

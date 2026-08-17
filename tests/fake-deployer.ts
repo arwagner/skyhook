@@ -31,7 +31,12 @@ export class FakeDeployer implements EnvironmentDeployer {
   readonly #onDeploy: FakeDeployerOptions['onDeploy'];
 
   constructor(options: FakeDeployerOptions = {}) {
-    this.#outcome = options.outcome ?? { ok: true, url: 'https://example.test', timing: NO_TIME };
+    this.#outcome = options.outcome ?? {
+      ok: true,
+      url: 'https://example.test',
+      outputs: { document: { url: 'https://example.test' }, omittedSensitive: [] },
+      timing: NO_TIME,
+    };
     this.#onDeploy = options.onDeploy;
   }
 

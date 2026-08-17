@@ -438,6 +438,24 @@ The pre-build check caught this arriving first in the plan rather than in the sp
 every consuming repository that the spec never authorized. The spec's behavior section now states it,
 so this decision implements a requirement instead of inventing one.
 
+*(Extended by `chg-008`: the same `terraform output -json` read now feeds a second output —
+`outputs`, the whole document as one compact JSON line, names to verbatim values, sensitive
+outputs omitted and named as omitted in the log. One read, two consumers; no new Terraform
+invocation, so D7a's timing is untouched. Nothing from the document is recorded — `url` stays
+the registry's only output — which keeps this change out of feat-001 and out of the privacy
+enumeration. The pre-build check corrected two things the first draft got wrong, both now in
+AC-24/AC-25 and the spec's behavior text. First, the write mechanism: `appendOutput` framed its
+heredoc with a marker derived from the value's own length, which a crafted output value can
+reproduce to close the delimiter early and inject further outputs — a live weakness for `url`
+already, hardened once at the shared writer with an opaque, value-independent delimiter (AC-25).
+Second, the framing: the deploy role never leaves skyhook (D6), so a later step could NOT read
+these outputs itself today — this change is a genuinely new, log-visible exposure channel, not a
+generalization, and the spec says so. The sensitive omission honors the definition author's own
+`sensitive` marking within one trust domain; it is not a boundary against a hostile author, who
+simply would not mark it. The raw parse holds sensitive values in the clear and so is never
+logged or surfaced (AC-25); an oversized document truncates to a marker rather than failing a
+deploy that already succeeded (AC-26).)*
+
 ### D11 — Where the new code lives
 ```
 action.yml                                  composite action; the consuming repo's `uses:` target
@@ -546,6 +564,9 @@ Each test names its criterion's trace token, e.g.
 | AC-21 | `configDocument()` in `src/cli/init.ts` | feed the seeded document straight to `parseConfig()` and assert it parses, so the commented placeholders are inert rather than broken; assert each operator-supplied setting is named in it with where its value comes from |
 | AC-22 | `deployEnvironment()` in `src/core/deploy.ts` + CLI wiring | fake env with a declared input missing / empty / rule-violating; assert the refusal lands after config, before the cap count and the claim — no record, no deploy-role assumption — and names the variable. In `tests/deploy-command.test.ts`, assert the refusal maps to exit 1, distinct from the consumer-apply exit 3 (D8), the AC-11/AC-18 pattern (`chg-007`) |
 | AC-23 | `deployEnvironment()` | successful apply: recorded values and commit updated together, wholesale; failing apply: both untouched, per AC-3's existing seam (`chg-007`) |
+| AC-24 | output parse in `src/adapters/terraform/environment.ts`; CLI wiring | adapter: a fixture `output -json` document with string, object, and sensitive entries — assert verbatim values, the sensitive entry absent, its name surfaced. CLI: `outputs` written as one compact JSON line on success, `{}` for a no-output definition, `""` on skip and on failure; the store untouched by the whole path; `action.yml` permissions unchanged (`chg-008`) |
+| AC-25 | `appendOutput` in `src/cli/deploy.ts` | a value containing a line equal to the old `skyhook-<name>-<length>` marker, and a multiline value: assert no second output is injected and the delimiter is not reconstructible from the value; assert no sensitive value appears in captured log/err across success, parse-failure, and non-zero-exit paths (`chg-008`) |
+| AC-26 | CLI wiring | an outputs document past the size ceiling: assert `outputs` is a small valid-JSON marker naming the omission, the fact is logged, and the deploy result is still `deployed` (`chg-008`) |
 
 **What the tests cannot prove**, in the same spirit as feat-001's note. Every row above that uses an
 injected runner proves what skyhook *asks* Terraform and STS to do, never whether they accept it —

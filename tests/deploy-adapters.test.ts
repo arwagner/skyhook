@@ -1006,3 +1006,58 @@ test('broker: manual access rides the default-branch role, wide like the sweep',
   // the sweep's — the guardrail gap is recorded in the plan (D6).
   assert.equal(first.includes('Policy='), false);
 });
+
+// --- every output handed back (chg-008) ---------------------------------------
+
+test('feat-002/AC-24 the adapter returns every non-sensitive output verbatim, omitting sensitive by name', async () => {
+  const { root } = readyDirectory();
+  const runner = new RecordingRunner();
+  // Terraform's own -json shape: each output an object with value + sensitive.
+  runner.respondTo('output', {
+    code: 0,
+    stdout: JSON.stringify({
+      url: { value: 'https://pr-482.example', sensitive: false },
+      web_bucket: { value: 'skyhook-acme-pr-482-web', sensitive: false },
+      cdn: { value: { id: 'E123', domain: 'd1.cloudfront.net' }, sensitive: false },
+      db_password: { value: 'hunter2', sensitive: true },
+    }),
+    stderr: '',
+  });
+
+  const outcome = await environmentUnder(root, runner).deploy({
+    repository: REPO,
+    identity: 'pr-482',
+    directory: 'infrastructure',
+  });
+
+  assert.equal(outcome.ok, true);
+  if (!outcome.ok) return;
+  // url still handed back on its own, unchanged.
+  assert.equal(outcome.url, 'https://pr-482.example');
+  // Every non-sensitive output, values verbatim including the nested object.
+  assert.deepEqual(outcome.outputs?.document, {
+    url: 'https://pr-482.example',
+    web_bucket: 'skyhook-acme-pr-482-web',
+    cdn: { id: 'E123', domain: 'd1.cloudfront.net' },
+  });
+  // The sensitive one is omitted from the document and named so the caller can log it.
+  assert.ok(!('db_password' in (outcome.outputs?.document ?? {})), 'sensitive value omitted');
+  assert.deepEqual(outcome.outputs?.omittedSensitive, ['db_password']);
+});
+
+test('feat-002/AC-24 a definition with no outputs yields an empty document, not null', async () => {
+  const { root } = readyDirectory();
+  const runner = new RecordingRunner();
+  runner.respondTo('output', { code: 0, stdout: '{}', stderr: '' });
+
+  const outcome = await environmentUnder(root, runner).deploy({
+    repository: REPO,
+    identity: 'pr-482',
+    directory: 'infrastructure',
+  });
+  assert.equal(outcome.ok, true);
+  if (!outcome.ok) return;
+  assert.equal(outcome.url, null);
+  assert.deepEqual(outcome.outputs?.document, {});
+  assert.deepEqual(outcome.outputs?.omittedSensitive, []);
+});
