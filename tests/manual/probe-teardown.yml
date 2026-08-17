@@ -1,0 +1,110 @@
+# feat-003 task 0.2 — the live probes (hs-2). THROWAWAY.
+#
+# Copy this to the deadweight repo as .github/workflows/skyhook-probe.yml, ON THE DEFAULT
+# BRANCH (GitHub reads triggers from there). Run each leg, record what it printed on the
+# teardown feature's hs-2, then delete the file. It creates nothing and destroys nothing:
+# every step is a token request or an STS call whose output is an ARN.
+#
+# The four questions, and which leg answers each:
+#
+#   (i)   Does a `closed`-type pull_request run still get an OIDC id-token?
+#         → open a PR touching anything, close it, read this workflow's run for that event.
+#           The run also tries the PULL-REQUEST role (expect success) and the DEFAULT-BRANCH
+#           role (expect REFUSAL — a close event presents the pull_request subject; if this
+#           succeeds, something is very wrong with the trust split).
+#
+#   (ii)  Does a schedule-triggered run's subject assume the default-branch role?
+#         → wait for the cron leg (or read the next scheduled run). Expect success.
+#
+#   (iii) Is the deploy role, with the widened two-subject trust, assumable from that run?
+#         → same scheduled run. NOTE: this leg FAILS until the deadweight repo's deploy role
+#           has been re-applied from the updated example (the two-subject trust). That
+#           failure is itself an answer worth recording: it is exactly the migration message
+#           path an existing installation will hit.
+#
+#   (iv)  Do the token's claims distinguish a scheduled run from other default-branch runs?
+#         → compare the printed claims between a `schedule` run and a `workflow_dispatch`
+#           run: both present the same default-branch `sub`; if `event_name` differs and STS
+#           honours it as a condition key, the deploy-role trust could narrow to
+#           schedule-only (plan D4 / security S2). Record both claim sets.
+
+name: skyhook-probe
+on:
+  pull_request:
+    types: [closed]
+  schedule:
+    - cron: '*/30 * * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+env:
+  AWS_ACCOUNT: "123456789012"
+  AWS_REGION: us-east-1
+  ROLE_PREFIX: skyhook
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - name: "Probe (i)/(iv): what triggered this, and what token does it carry"
+        run: |
+          echo "== event: ${GITHUB_EVENT_NAME}  action: ${{ github.event.action || '(none)' }}"
+          if [ -z "${ACTIONS_ID_TOKEN_REQUEST_URL:-}" ]; then
+            echo "PROBE (i): FAILED — no token request URL; this trigger cannot mint an id-token"
+            exit 1
+          fi
+          TOKEN=$(curl -sS -H "Authorization: bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" \
+            "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=sts.amazonaws.com" | jq -r .value)
+          if [ -z "$TOKEN" ] || [ "$TOKEN" = "null" ]; then
+            echo "PROBE (i): FAILED — the token service answered without a token"
+            exit 1
+          fi
+          echo "PROBE (i): an id-token WAS issued to this ${GITHUB_EVENT_NAME} run"
+          # The claims, for probe (iv). The token itself is never printed.
+          echo "$TOKEN" > "$RUNNER_TEMP/oidc.jwt"
+          python3 - "$RUNNER_TEMP/oidc.jwt" << 'PY'
+          import base64, json, sys
+          payload = open(sys.argv[1]).read().split('.')[1]
+          payload += '=' * (-len(payload) % 4)
+          claims = json.loads(base64.urlsafe_b64decode(payload))
+          keep = ['sub', 'aud', 'event_name', 'ref', 'ref_type', 'repository',
+                  'job_workflow_ref', 'workflow_ref', 'runner_environment']
+          print('== claims relevant to the trust policies:')
+          print(json.dumps({k: claims.get(k) for k in keep}, indent=2))
+          PY
+
+      - name: "Probe (i) close leg: the pull-request role says yes, the default-branch role says no"
+        if: github.event_name == 'pull_request'
+        run: |
+          assume() {
+            aws sts assume-role-with-web-identity \
+              --region "$AWS_REGION" \
+              --role-arn "arn:aws:iam::${AWS_ACCOUNT}:role/${ROLE_PREFIX}-$1" \
+              --role-session-name skyhook-probe \
+              --web-identity-token "file://$RUNNER_TEMP/oidc.jwt" \
+              --query 'AssumedRoleUser.Arn' --output text 2>&1
+          }
+          echo "== ${ROLE_PREFIX}-pull-request (expect an ARN):"
+          assume pull-request || true
+          echo "== ${ROLE_PREFIX}-default-branch (expect AccessDenied — the trust split holding):"
+          assume default-branch || true
+
+      - name: "Probes (ii)/(iii): the scheduled subject against both roles"
+        if: github.event_name != 'pull_request'
+        run: |
+          assume() {
+            aws sts assume-role-with-web-identity \
+              --region "$AWS_REGION" \
+              --role-arn "arn:aws:iam::${AWS_ACCOUNT}:role/${ROLE_PREFIX}-$1" \
+              --role-session-name skyhook-probe \
+              --web-identity-token "file://$RUNNER_TEMP/oidc.jwt" \
+              --query 'AssumedRoleUser.Arn' --output text 2>&1
+          }
+          echo "== PROBE (ii) ${ROLE_PREFIX}-default-branch (expect an ARN):"
+          assume default-branch || true
+          echo "== PROBE (iii) ${ROLE_PREFIX}-deploy (an ARN once the two-subject trust is applied;"
+          echo "   AccessDenied before that IS the migration path an old installation hits):"
+          assume deploy || true

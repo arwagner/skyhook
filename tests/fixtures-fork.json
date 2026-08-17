@@ -1,0 +1,6 @@
+{
+  "pull_request": {
+    "number": 7,
+    "head": { "sha": "forkhead1234", "repo": { "full_name": "someone-else/widgets" } }
+  }
+}

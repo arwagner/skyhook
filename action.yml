@@ -1,0 +1,120 @@
+# Skyhook's deploy action.
+#
+# Reference this from a workflow on your repository's DEFAULT BRANCH:
+#
+#   uses: skylight-hq/skyhook@<ref>
+#
+# The ref pins whose code runs. A pull request can edit the workflow that calls this — and
+# doing so gains it no wider credentials, because what a run may assume is decided by what
+# TRIGGERED it rather than by any file in the repository. What editing it can do is skip
+# skyhook, and so skip the narrowing skyhook asks for. See the constitution's "Preview
+# environments are not isolated from each other".
+#
+# A composite action rather than a JavaScript one, deliberately: skyhook has no build step
+# (feat-001 plan D1), so shipping a bundled dist/ would introduce the project's first one
+# and a class of bug where the shipped artifact and the reviewed source disagree.
+name: skyhook
+description: >-
+  Deploy this pull request's infrastructure as a tracked, disposable environment; destroy it
+  when the pull request closes; sweep up whatever a missed close event left behind; keep a
+  named long-running environment (staging, a demo) tracking the default branch, protected
+  from every automatic teardown.
+
+inputs:
+  node-version:
+    description: >-
+      The Node major used to run skyhook. Pinned rather than taking whatever the runner
+      ships, so an image change cannot alter what skyhook does.
+    required: false
+    default: '24'
+  terraform-version:
+    description: >-
+      The Terraform skyhook applies your infrastructure with. Skyhook installs it rather than
+      assuming the runner has one: GitHub's images no longer ship Terraform, and the symptom
+      when it is absent is a deploy that has already claimed an environment and recorded it
+      before it discovers there is nothing to apply with.
+      Left as `latest` because the version that suits your infrastructure is your call, not
+      skyhook's — pin it here if your definition needs a particular one.
+    required: false
+    default: latest
+  github-token:
+    description: >-
+      Reads settings from the repository's DEFAULT branch through the GitHub API, which is what
+      stops a pull request changing its own deploy by editing settings on its own branch
+      (feat-002/AC-16). Defaults to the job's own token, so the scaffolded workflow needs no
+      `env:` block and no secret — every copy of that file is a place this could be got wrong.
+      Needs `contents: read` and nothing else.
+    required: false
+    default: ${{ github.token }}
+  command:
+    description: >-
+      Which manual verb a workflow_dispatch run performs: `teardown`, `protect`, or
+      `unprotect`. Pass your workflow's dispatch input through here; other events ignore it —
+      what triggered the run, not this input, decides between deploy, teardown and sweep.
+    required: false
+    default: ''
+  environment:
+    description: >-
+      The long-running environment a run acts on. For a push-triggered deploy this is the
+      operator-chosen name the environment exists under (`staging`, a demo); for a dispatched
+      teardown/protect/unprotect it names the target. Ignored by pull-request runs — their
+      environment is derived from the trigger, never chosen.
+    required: false
+    default: ''
+
+outputs:
+  url:
+    description: >-
+      Where the environment is, or empty when the definition declares no `url` output and
+      when the run skipped a fork. Skyhook hands this back and does nothing else with it:
+      it asks for no permission to write to a pull request and owns no comment format.
+    value: ${{ steps.deploy.outputs.url }}
+  identity:
+    description: The environment's identity, e.g. `pr-482`. Empty when nothing was deployed.
+    value: ${{ steps.deploy.outputs.identity }}
+  skyhook-seconds:
+    description: >-
+      Skyhook's own share of the run in seconds. The budget it is held to is 60. Two things
+      are excluded and both are yours: your `terraform apply`, and the `terraform init`
+      before it that fetches the providers and modules your definition declares. Skyhook
+      controls neither their size nor how long they take to arrive, and a budget counting
+      them would report your dependency tree rather than skyhook's overhead. The one piece
+      of skyhook's own work inside that excluded step — settling where this environment's
+      state lives, a few object-store requests — is not counted here either.
+    value: ${{ steps.deploy.outputs.skyhook-seconds }}
+
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-node@v4
+      with:
+        node-version: ${{ inputs.node-version }}
+
+    # Skyhook shells out to Terraform, so Terraform is skyhook's dependency to satisfy and not
+    # the consuming repository's to remember. `terraform_wrapper: false` matters: the wrapper
+    # rewrites stdout, and skyhook reads `terraform output -json` to learn the environment's
+    # address.
+    - uses: hashicorp/setup-terraform@v3
+      with:
+        terraform_version: ${{ inputs.terraform-version }}
+        terraform_wrapper: false
+
+    # One step, five verbs, chosen by what TRIGGERED the run — visible here, in the file a
+    # maintainer reviews, rather than decided inside skyhook (feat-003 plan D1; feat-006 D1):
+    #   a schedule                     → sweep     (destroy every eligible environment)
+    #   a manual dispatch              → the `command` input (teardown | protect | unprotect)
+    #   a push to the default branch   → deploy    (the long-running environment named above)
+    #   a pull request closing        → teardown  (destroy this pull request's environment)
+    #   any other pull request event  → deploy
+    - id: deploy
+      shell: bash
+      env:
+        GITHUB_TOKEN: ${{ inputs.github-token }}
+        SKYHOOK_ENVIRONMENT: ${{ inputs.environment }}
+        SKYHOOK_COMMAND: >-
+          ${{ github.event_name == 'schedule' && 'sweep'
+           || github.event_name == 'workflow_dispatch' && inputs.command
+           || github.event_name == 'push' && 'deploy'
+           || github.event.action == 'closed' && 'teardown'
+           || 'deploy' }}
+      run: node "${{ github.action_path }}/bin/skyhook.ts" "$SKYHOOK_COMMAND"

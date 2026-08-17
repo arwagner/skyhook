@@ -1,0 +1,11 @@
+node_modules/
+*.log
+
+# Terraform
+.terraform/
+*.tfstate
+*.tfstate.*
+.terraform.lock.hcl
+
+# Working files. The scratchpad skill puts notes and probes here; none of it is product.
+.scratchpad/

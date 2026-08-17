@@ -1,0 +1,385 @@
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { FakeStore } from './fake-store.ts';
+import {
+  Registry,
+  protectionKeyFor,
+  registryKeyFor,
+} from '../src/core/registry.ts';
+
+function fixedClock(): () => string {
+  let tick = 0;
+  return () => `2026-08-14T00:00:${String(tick++).padStart(2, '0')}.000Z`;
+}
+
+function makeRegistry(store: FakeStore): Registry {
+  return new Registry(store, { now: fixedClock() });
+}
+
+const REPO = 'acme/widgets';
+
+// --- claim ------------------------------------------------------------------
+
+test('feat-001/AC-5 two concurrent claims of one identity: exactly one wins', async () => {
+  // AC-5: two concurrent attempts to claim the same identity result in exactly one
+  // success; the loser returns a result distinguishable from any other failure.
+  // Both claims are held open inside the store before either commits, so neither can
+  // have observed the other — this is contention, not two sequential calls.
+  let release = (): void => {};
+  const parked = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  let arrived = 0;
+  const store = new FakeStore({
+    beforeCommit: async () => {
+      arrived += 1;
+      if (arrived <= 2) await parked;
+    },
+  });
+  const registry = makeRegistry(store);
+
+  const both = Promise.all([
+    registry.claim({ repository: REPO, identity: 'pr-482' }),
+    registry.claim({ repository: REPO, identity: 'pr-482' }),
+  ]);
+  await Promise.resolve();
+  assert.equal(arrived, 2, 'both claims are in flight before either commits');
+  release();
+
+  const [first, second] = await both;
+  const winners = [first, second].filter((o) => o.ok);
+  const losers = [first, second].filter((o) => !o.ok);
+  assert.equal(winners.length, 1, 'exactly one claim succeeds');
+  assert.equal(losers.length, 1);
+  assert.equal(losers[0]?.ok, false);
+  if (losers[0]?.ok === false) {
+    // A distinct, non-crashing result — not an exception, and not a generic error.
+    assert.equal(losers[0].reason, 'held');
+  }
+  assert.deepEqual(store.allKeys(), [registryKeyFor(REPO, 'pr-482')], 'one record, not two');
+});
+
+test('feat-001/AC-5 the losing claim is a typed result, never a thrown exception', async () => {
+  const registry = makeRegistry(new FakeStore());
+  await registry.claim({ repository: REPO, identity: 'staging' });
+  const loser = await registry.claim({ repository: REPO, identity: 'staging' });
+  assert.equal(loser.ok, false);
+});
+
+test('feat-001/AC-16 a claim against an existing record is refused, and the two states are distinguishable', async () => {
+  // AC-16: claiming an identity whose record exists is refused whether that record is
+  // active or released, and the two refusals differ from each other.
+  const store = new FakeStore();
+  const registry = makeRegistry(store);
+
+  await registry.claim({ repository: REPO, identity: 'held-one' });
+  const heldAgain = await registry.claim({ repository: REPO, identity: 'held-one' });
+  assert.deepEqual(heldAgain, { ok: false, reason: 'held' });
+
+  const claimed = await registry.claim({ repository: REPO, identity: 'released-one' });
+  assert.equal(claimed.ok, true);
+  if (!claimed.ok) return;
+  const released = await registry.release(REPO, 'released-one', claimed.version);
+  assert.equal(released.ok, true);
+
+  const releasedAgain = await registry.claim({ repository: REPO, identity: 'released-one' });
+  assert.deepEqual(releasedAgain, { ok: false, reason: 'awaiting-teardown' });
+
+  assert.notEqual(
+    heldAgain.ok === false ? heldAgain.reason : '',
+    releasedAgain.ok === false ? releasedAgain.reason : '',
+  );
+});
+
+test('feat-001/AC-16 a name becomes claimable only once its record is deleted', async () => {
+  const store = new FakeStore();
+  const registry = makeRegistry(store);
+
+  const claimed = await registry.claim({ repository: REPO, identity: 'pr-9' });
+  assert.equal(claimed.ok, true);
+  if (!claimed.ok) return;
+  await registry.release(REPO, 'pr-9', claimed.version);
+
+  assert.equal((await registry.claim({ repository: REPO, identity: 'pr-9' })).ok, false);
+
+  await registry.remove(REPO, 'pr-9');
+  assert.equal((await registry.claim({ repository: REPO, identity: 'pr-9' })).ok, true);
+});
+
+test('feat-001/AC-12 the same identity in two repositories both succeed', async () => {
+  const registry = makeRegistry(new FakeStore());
+  const one = await registry.claim({ repository: 'acme/widgets', identity: 'staging' });
+  const other = await registry.claim({ repository: 'acme/gadgets', identity: 'staging' });
+  assert.equal(one.ok, true);
+  assert.equal(other.ok, true);
+  if (!one.ok || !other.ok) return;
+  assert.equal(one.record.repository, 'acme/widgets');
+  assert.equal(other.record.repository, 'acme/gadgets');
+});
+
+test('feat-001/AC-12 every stored record names the repository it belongs to', async () => {
+  const store = new FakeStore();
+  const registry = makeRegistry(store);
+  await registry.claim({ repository: REPO, identity: 'staging' });
+  const raw = store.rawValue(registryKeyFor(REPO, 'staging'));
+  assert.ok(raw !== undefined);
+  assert.equal(JSON.parse(raw).repository, REPO);
+});
+
+test('registry: a claim reports the missing bucket rather than inventing one', async () => {
+  const store = new FakeStore({ containerExists: false });
+  const registry = makeRegistry(store);
+  const outcome = await registry.claim({ repository: REPO, identity: 'staging' });
+  assert.deepEqual(outcome, { ok: false, reason: 'container-missing' });
+  assert.deepEqual(store.allKeys(), []);
+});
+
+// --- stale writes -----------------------------------------------------------
+
+test('feat-001/AC-6 a write made against a stale read is refused and leaves no trace', async () => {
+  // AC-6: a registry write made against a stale read is refused rather than applied,
+  // and no refused write leaves any trace in the stored record.
+  const store = new FakeStore();
+  const registry = makeRegistry(store);
+
+  const claimed = await registry.claim({ repository: REPO, identity: 'staging' });
+  assert.equal(claimed.ok, true);
+  if (!claimed.ok) return;
+  const staleVersion = claimed.version;
+
+  const first = await registry.update(REPO, 'staging', staleVersion, { deployedCommit: 'aaa111' });
+  assert.equal(first.ok, true);
+
+  const before = store.rawValue(registryKeyFor(REPO, 'staging'));
+  const second = await registry.update(REPO, 'staging', staleVersion, { deployedCommit: 'bbb222' });
+  assert.deepEqual(second, { ok: false, reason: 'stale' });
+  assert.equal(store.rawValue(registryKeyFor(REPO, 'staging')), before, 'nothing changed');
+});
+
+test('feat-001/AC-6 concurrent registry writes: one succeeds, the other is told it lost', async () => {
+  const store = new FakeStore();
+  const registry = makeRegistry(store);
+  const claimed = await registry.claim({ repository: REPO, identity: 'staging' });
+  assert.equal(claimed.ok, true);
+  if (!claimed.ok) return;
+
+  // Both runs read the same version, then both write.
+  const [a, b] = await Promise.all([
+    registry.update(REPO, 'staging', claimed.version, { deployedCommit: 'aaa111' }),
+    registry.update(REPO, 'staging', claimed.version, { deployedCommit: 'bbb222' }),
+  ]);
+  assert.equal([a, b].filter((o) => o.ok).length, 1, 'exactly one write lands');
+  assert.equal([a, b].filter((o) => !o.ok).length, 1, 'the other is told, not discarded');
+});
+
+// --- listing and the cap ----------------------------------------------------
+
+test('feat-001/AC-10 countActive counts only active environments, scoped to one repository', async () => {
+  // AC-10: the store exposes the count of environments currently active to callers
+  // that enforce the cap.
+  const registry = makeRegistry(new FakeStore());
+  const one = await registry.claim({ repository: REPO, identity: 'a' });
+  await registry.claim({ repository: REPO, identity: 'b' });
+  await registry.claim({ repository: 'acme/gadgets', identity: 'c' });
+  assert.equal(one.ok, true);
+  if (!one.ok) return;
+  await registry.release(REPO, 'a', one.version);
+
+  assert.deepEqual(await registry.countActive(REPO), { ok: true, count: 1 });
+  assert.deepEqual(await registry.countActive('acme/gadgets'), { ok: true, count: 1 });
+});
+
+test('registry: listing is scoped to one repository and refuses a corrupt record loudly', async () => {
+  const store = new FakeStore();
+  const registry = makeRegistry(store);
+  await registry.claim({ repository: REPO, identity: 'a' });
+
+  const listed = await registry.list(REPO);
+  assert.equal(listed.ok, true);
+  if (!listed.ok) return;
+  assert.equal(listed.records.length, 1);
+
+  // Undercounting silently would over-provision against the cap, so a record that
+  // cannot be read is an error rather than a skipped row.
+  store.seed(registryKeyFor(REPO, 'broken'), 'not json');
+  const broken = await registry.list(REPO);
+  assert.equal(broken.ok, false);
+});
+
+// --- protection -------------------------------------------------------------
+
+test('feat-001/AC-15 protection is read from its own key, not from the record', async () => {
+  // AC-15: protection is stored outside the environment record.
+  const store = new FakeStore();
+  const registry = makeRegistry(store);
+  await registry.claim({ repository: REPO, identity: 'staging' });
+
+  assert.deepEqual(await registry.isProtected(REPO, 'staging'), { ok: true, isProtected: false });
+
+  await registry.setProtected(REPO, 'staging', true);
+  assert.deepEqual(await registry.isProtected(REPO, 'staging'), { ok: true, isProtected: true });
+  assert.ok(
+    store.allKeys().includes(protectionKeyFor(REPO, 'staging')),
+    'the mark lives at its own key, which is what lets a bucket policy refuse the write',
+  );
+
+  await registry.setProtected(REPO, 'staging', false);
+  assert.deepEqual(await registry.isProtected(REPO, 'staging'), { ok: true, isProtected: false });
+});
+
+test('feat-001/AC-15 a stray "protected" field on the record is ignored, not honored', async () => {
+  // If the record could carry protection, a pull-request run — which is allowed to
+  // write its own record — could mark its environment protected. It cannot, because
+  // nothing reads the field.
+  const store = new FakeStore();
+  const registry = makeRegistry(store);
+  await registry.claim({ repository: REPO, identity: 'pr-482' });
+
+  const key = registryKeyFor(REPO, 'pr-482');
+  const raw = store.rawValue(key);
+  assert.ok(raw !== undefined);
+  store.seed(key, JSON.stringify({ ...JSON.parse(raw), protected: true }));
+
+  assert.deepEqual(await registry.isProtected(REPO, 'pr-482'), { ok: true, isProtected: false });
+});
+
+test('feat-001/AC-15 a halted teardown never leaves a record without its protection marker', async () => {
+  // Regression for analyze.md SEC-2. The constitution forbids destroying a protected
+  // environment automatically, so a teardown that stops halfway must not leave a
+  // record standing with its protection gone — the sweep would then be free to
+  // destroy it. An orphan marker is the acceptable residue; the spec already calls
+  // that garbage to be collected.
+  const store = new FakeStore();
+  const registry = makeRegistry(store);
+  await registry.claim({ repository: REPO, identity: 'staging' });
+  await registry.setProtected(REPO, 'staging', true);
+
+  const deleted: string[] = [];
+  const halting = Object.create(store) as FakeStore;
+  halting.delete = async (key: string) => {
+    deleted.push(key);
+    if (deleted.length > 1) return { ok: false, reason: 'container-missing' };
+    return store.delete(key);
+  };
+
+  const outcome = await new Registry(halting, { now: fixedClock() }).remove(REPO, 'staging');
+  assert.equal(outcome.ok, false, 'the halted teardown reports failure rather than success');
+  assert.equal(deleted[0], registryKeyFor(REPO, 'staging'), 'the record goes first');
+  assert.equal(store.rawValue(registryKeyFor(REPO, 'staging')), undefined);
+  assert.deepEqual(
+    store.allKeys(),
+    [protectionKeyFor(REPO, 'staging')],
+    'what survives is an orphan marker, not an unprotected record',
+  );
+});
+
+test('feat-001/AC-15 a protection marker is deleted together with its record', async () => {
+  // A marker left behind would silently attach to the next environment claiming that
+  // name, which would then never be cleaned up automatically.
+  const store = new FakeStore();
+  const registry = makeRegistry(store);
+  await registry.claim({ repository: REPO, identity: 'staging' });
+  await registry.setProtected(REPO, 'staging', true);
+
+  await registry.remove(REPO, 'staging');
+  assert.deepEqual(store.allKeys(), [], 'record and marker go together');
+  assert.deepEqual(await registry.isProtected(REPO, 'staging'), { ok: true, isProtected: false });
+});
+
+// --- the deploy contract (chg-007) ------------------------------------------
+
+test('feat-001/AC-28 a record carries an environment address, and none before one is known', async () => {
+  // AC-28: every record can carry the address at which its environment is reachable,
+  // and carries none before one is known. A claim happens before the infrastructure
+  // exists, so a freshly claimed record must have no address at all.
+  const store = new FakeStore();
+  const registry = makeRegistry(store);
+
+  const claimed = await registry.claim({ repository: REPO, identity: 'pr-482' });
+  assert.equal(claimed.ok, true);
+  assert.equal(claimed.ok && claimed.record.url, null);
+
+  const updated = await registry.update(REPO, 'pr-482', claimed.ok ? claimed.version : '', {
+    url: 'https://pr-482.example.test',
+  });
+  assert.equal(updated.ok, true);
+
+  // Survives a re-read, rather than only existing in the returned value.
+  const reread = await registry.read(REPO, 'pr-482');
+  assert.equal(reread.ok && reread.record?.url, 'https://pr-482.example.test');
+});
+
+test('feat-001/AC-28 a record stored before the address existed reads back with none', async () => {
+  // The field is additive. Rejecting a record written by an earlier version would strand
+  // every environment the prototype has already recorded — the registry is the only thing
+  // that knows they need tearing down.
+  const store = new FakeStore();
+  store.seed(
+    registryKeyFor(REPO, 'staging'),
+    JSON.stringify({
+      schemaVersion: 1,
+      repository: REPO,
+      identity: 'staging',
+      state: 'active',
+      deployedCommit: 'abc123',
+      createdAt: '2026-08-01T00:00:00.000Z',
+      updatedAt: '2026-08-01T00:00:00.000Z',
+    }),
+  );
+
+  const read = await makeRegistry(store).read(REPO, 'staging');
+  assert.equal(read.ok, true);
+  assert.equal(read.ok && read.record?.url, null);
+  assert.equal(read.ok && read.record?.deployedCommit, 'abc123');
+});
+
+test('feat-001/AC-10 countEnvironments counts a repository without reading any record', async () => {
+  // AC-10: the count a cap enforcer uses is obtained WITHOUT reading any environment's
+  // record. A deploy's credentials are narrowed to its own environment, so a count that
+  // reads every record cannot run at all — it would be refused by the cloud, and the cap
+  // would fail in a way that looks like a broken registry.
+  //
+  // The store refuses every read, so this passes only if no read is attempted.
+  const store = new FakeStore({ refuseReads: true });
+  const registry = makeRegistry(store);
+
+  store.seed(registryKeyFor(REPO, 'pr-1'), '{}');
+  store.seed(registryKeyFor(REPO, 'pr-2'), '{}');
+  store.seed(registryKeyFor(REPO, 'staging'), '{}');
+  store.seed(registryKeyFor('acme/gadgets', 'pr-1'), '{}');
+  store.seed(protectionKeyFor(REPO, 'staging'), 'marker');
+
+  assert.deepEqual(await registry.countEnvironments(REPO), { ok: true, count: 3 });
+  assert.deepEqual(await registry.countEnvironments('acme/gadgets'), { ok: true, count: 1 });
+});
+
+test('feat-001/AC-10 countEnvironments counts released environments too', async () => {
+  // A record lives exactly as long as its environment does, so a released environment is
+  // still standing in the account and still counts against the cap. This is the whole
+  // reason the cap does not reuse countActive.
+  const store = new FakeStore();
+  const registry = makeRegistry(store);
+
+  const first = await registry.claim({ repository: REPO, identity: 'pr-1' });
+  await registry.claim({ repository: REPO, identity: 'pr-2' });
+  assert.equal(first.ok, true);
+  if (first.ok) await registry.release(REPO, 'pr-1', first.version);
+
+  assert.deepEqual(await registry.countActive(REPO), { ok: true, count: 1 });
+  assert.deepEqual(await registry.countEnvironments(REPO), { ok: true, count: 2 });
+});
+
+test('removeRecord deletes the record alone and never reaches the protection prefix', async () => {
+  // The close fast path's credentials are refused every operation under protected/*,
+  // even deleting a marker that is not there — so its removal must not attempt one.
+  const store = new FakeStore();
+  const registry = makeRegistry(store);
+  await registry.claim({ repository: REPO, identity: 'pr-9' });
+  store.seed(protectionKeyFor(REPO, 'pr-8'), 'a neighbour, untouched');
+
+  const removed = await registry.removeRecord(REPO, 'pr-9');
+
+  assert.deepEqual(removed, { ok: true });
+  assert.equal(store.rawValue(registryKeyFor(REPO, 'pr-9')), undefined);
+  assert.notEqual(store.rawValue(protectionKeyFor(REPO, 'pr-8')), undefined);
+});
