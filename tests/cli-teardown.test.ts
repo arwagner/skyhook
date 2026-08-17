@@ -428,6 +428,10 @@ test('feat-007/AC-8 a close on a pooled repository finds the slot by claimant an
   assert.equal((JSON.parse(raw ?? '{}') as { state?: string }).state, 'released');
   assert.match(out.lines.join(' '), /slot-1/);
   assert.match(out.lines.join(' '), /sweep/);
+  assert.ok(
+    !out.lines.join(' ').includes('Its record is removed'),
+    'the close path never claims a removal it deferred',
+  );
 });
 
 test('feat-007/AC-8 a failed claimant lookup stops loudly and destroys nothing', async () => {

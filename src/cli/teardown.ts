@@ -197,6 +197,7 @@ export async function teardown(options: TeardownOptions): Promise<number> {
     return 1;
   }
 
+  const removalDeferred = pullRequestNumberFor(identity) === null;
   const result = await teardownEnvironment(
     {
       registry,
@@ -205,11 +206,11 @@ export async function teardown(options: TeardownOptions): Promise<number> {
       markerRemoval: 'record-only',
       // A pull-request run may not free a slot's name (feat-007/AC-11); the sweep does,
       // within one interval (chg-002, found live on deadweight pull request #9).
-      ...(pullRequestNumberFor(identity) === null ? { recordRemoval: 'defer' as const } : {}),
+      ...(removalDeferred ? { recordRemoval: 'defer' as const } : {}),
     },
     { repository, identity },
   );
-  return report(identity, result, options);
+  return report(identity, result, options, removalDeferred);
 }
 
 /** The manual teardown of one long-running environment (feat-006 plan D5). */
@@ -337,11 +338,20 @@ function reportManual(identity: string, result: TeardownResult, options: Teardow
   return exitCodeForManualTeardown(result);
 }
 
-function report(identity: string, result: TeardownResult, options: TeardownOptions): number {
+function report(
+  identity: string,
+  result: TeardownResult,
+  options: TeardownOptions,
+  removalDeferred = false,
+): number {
   switch (result.kind) {
     case 'destroyed':
       for (const note of result.notes) options.out(note);
-      options.out(`Destroyed ${identity}. Its record is removed and the name is free.`);
+      options.out(
+        removalDeferred
+          ? `Destroyed ${identity}'s infrastructure. Its released record awaits the scheduled sweep, which frees the name.`
+          : `Destroyed ${identity}. Its record is removed and the name is free.`,
+      );
       break;
     case 'nothing':
       options.out(`Nothing to tear down: no environment is recorded for ${identity}.`);
