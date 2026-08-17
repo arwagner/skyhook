@@ -61,6 +61,10 @@ state/<repo>/<environment>/terraform.tfstate
 *Why this is the load-bearing decision:* it makes the atomic claim fall out of S3 rather than
 being built on top of it. Claiming an environment is `PutObject` with `If-None-Match: *`, which
 succeeds only if no object exists at that key — exactly mutual exclusion on the name (AC-5).
+  Amended by chg-012 (built with feat-007): "no state machine on top" holds for FRESH claims
+  only. The pool claim is the deliberate, named exception — one compare-and-swap transition of
+  an existing `warm` record to `active` (AC-38) — and D2c's refused-versus-contended reasoning
+  extends to it unchanged.
 Updating a record is `PutObject` with `If-Match: <etag>` from the read, which fails if anything
 changed since (AC-6). Two runs claiming *different* environments never contend at all, because
 they touch different keys.

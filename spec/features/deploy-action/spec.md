@@ -23,10 +23,12 @@ draw. The constitution records the choice and its cost. See `research.md` for th
 
 ## Behavior & scenarios
 
-A **deploy** is one run of skyhook on behalf of one pull request. It derives the environment
-identity from the trigger, claims or refreshes that environment's record, deploys the repository's
-infrastructure as an isolated copy belonging to that identity, records the outcome, and hands back
-the environment's URL. Those steps happen in that order, and the order is the requirement: an
+A **deploy** is one run of skyhook on behalf of one pull request. It derives the run's
+claimant identity from the trigger; resolves its environment — on a pooled repository, the
+warm slot it claims or already holds, otherwise an environment named by the claimant identity
+itself — by claiming or refreshing that environment's record; deploys the repository's
+infrastructure as an isolated copy belonging to that environment identity; records the
+outcome; and hands back the environment's URL (chg-009). Those steps happen in that order, and the order is the requirement: an
 apply that ran before a record existed would produce infrastructure no later sweep could find.
 
 The **deploy role** is the role skyhook assumes to build the consuming repository's own
@@ -38,13 +40,19 @@ needs, and does not try. This is distinct from the two roles skyhook installs fo
 reach skyhook's own data and nothing else.
 
 **A pull request's credentials are confined to ephemeral environments, and the cloud draws no line
-inside that.** What a pull-request-triggered run can obtain is fixed by what triggered it rather
-than by any file in the repository, so a branch that edits skyhook's workflow gains no wider reach.
-Within the ephemeral namespace, skyhook asks for credentials narrowed to the single environment it
-claimed — which keeps an honest run out of a sibling's environment and does nothing to stop a run
-that declines to ask. That one preview environment is not held apart from another is a decision,
-recorded in the constitution along with what it costs: infrastructure state holds any credential
-that infrastructure generated for itself, and a sibling preview can read it.
+inside that.** The **ephemeral namespace** comprises this repository's pull-request identities
+(`pr-<n>`) and, where pooling (feat-007) is enabled, its warm-slot identities (`slot-<n>`).
+What a pull-request-triggered run can obtain is fixed by what triggered it rather than by any
+file in the repository, so a branch that edits skyhook's workflow gains no wider reach. Within
+the ephemeral namespace, a run with pooling enabled may first read the repository's slot
+records and attempt the pool claim; skyhook then asks for credentials narrowed to the single
+environment the claim resolved — the claimed slot, or the derived identity on the
+from-scratch path — which keeps an honest run out of a sibling's environment and does nothing
+to stop a run that declines to ask. That one preview environment is not held apart from
+another is a decision, recorded in the constitution along with what it costs: infrastructure
+state holds any credential that infrastructure generated for itself, and a sibling preview can
+read it — and with pooling enabled, a sibling can likewise read the slot records, which hold
+deployment metadata only (chg-009).
 
 **The environment identity reaches the repository's infrastructure without a contract term.** Each
 environment is deployed as an isolated copy of the same definition, named by its identity, and the
@@ -280,9 +288,14 @@ handed-back document lives exactly as long as the run.
 - [ ] AC-18: A run that fails because the consuming repository's apply failed is distinguishable, in
       its output and its exit status, from a run that failed because skyhook itself could not do its
       job.
-- [ ] AC-19: The credentials skyhook obtains for its own registry and state work are narrowed, at the
-      moment they are issued, so that every read, write and delete they permit falls inside the
-      single environment the run claimed. The constitution's named exceptions are permitted at
+- [ ] AC-19: The credentials skyhook obtains for its own registry and state work are narrowed so
+      that every read, write and delete they permit falls inside the single environment the run
+      claimed, and that narrowing is in force before the repository's own infrastructure code
+      runs. With pooling off, the narrowing is applied at the moment the credentials are
+      issued, exactly as before. With pooling on, issuance additionally permits reading this
+      repository's slot records and the conditional pool-claim write on them — nothing else
+      widens — and the acting narrowing to the one resolved environment is applied the moment
+      the claim resolves, before any apply (chg-009). The constitution's named exceptions are permitted at
       this layer as well, and nothing further: the run may learn the names of the environments this
       repository holds, which is what lets it find its own copy and count the cap; it may read
       the single piece of state the infrastructure tool consults before it can be told which
@@ -351,6 +364,15 @@ handed-back document lives exactly as long as the run.
       annotation as well as a log line, and the deploy result stays `deployed`. The size check
       runs on the compact document after sensitive outputs are omitted, so nothing it measures or
       reports can reopen the disclosure AC-25 closes. (Added by `chg-008`.)
+
+- [ ] AC-27: On a pooled repository, the deploy path's order is observable as: declared-input
+      refusals first, then the slot-record read and pool claim; on fall-through, the cap check
+      and then the fresh claim (a pool claim creates no record and re-checks no cap; the
+      fallback creates one and is capped exactly as today); then the narrowing to the single
+      resolved environment, and only then the repository's apply — demonstrated with fake
+      adapters by asserting the sequence, and on the live installation by inspecting the
+      narrowed request on both the warm and the cold path. With pooling off, the sequence is
+      byte-for-byte today's (chg-009).
 
 ## Known sharp edges (prototype)
 - **Nothing tears these environments down.** Teardown on close and the scheduled sweep are separate

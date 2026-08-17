@@ -6,7 +6,8 @@ id: "feat-007"               # IMMUTABLE. Format: feat-NNN (zero-padded, >=3 dig
 slug: "warm-slot-pool"
                              # kebab-case folder name. Unique across features/ AND archive/. Renamable.
 title: "Warm slot pool: pre-provisioned preview environments a pull request claims for a fast URL"
-status: active               # active | done | dropped
+status: done                 # active | done | dropped — done 2026-08-17: built, gated,
+                             #   and verified live on deadweight the same day
 owner: "andrew"              # single owner (features are single-author; two authors => split)
 depth: "prototype"           # prototype | mvp | ga — gate softness. From .spec-flow.md default_depth.
 sprint: null                 # native board mode only; else null
@@ -25,9 +26,8 @@ readiness:                   # per-artifact progress vector
                              #   clarification markers; reviewer's fixes folded in
   plan:     ready            # none | draft | ready — plan + tasks written 2026-08-17; one
                              #   build with chg-012/chg-009 and a drafted feat-005 chg-002
-  tasks:    draft            # none | draft | ready — phases 1-7 built and verified
-                             #   2026-08-17 (435 tests green); 8.1 [H] live check and 8.2
-                             #   fold outstanding
+  tasks:    ready            # none | draft | ready — phases 1-7 built (437 tests green),
+                             #   8.1 verified live on deadweight, 8.2 folded — 2026-08-17
 gate:
   analyze: pass              # 2026-08-17: first pass fix-then-implement (B1 hard: honest
                              #   cloud/guardrail split in AC-11/D8; B2: retry bound), all
@@ -39,7 +39,10 @@ human_signoff:
   - id: hs-1
     description: "Task 8.1 — live end-to-end on the deadweight repo with pool.target 1: warm build, warm claim (measure skyhook's share vs the 60 s budget), push refresh, cloud refusals of slot build/destroy from PR credentials, close-destroy-rebuild, conditional-write probe on slot records. Blocks completion, not start."
     owner: "andrew"
-    resolved: false
+    resolved: true             # 2026-08-17: driven live by the agent at andrew's explicit
+                             #   request; observations recorded under tasks.md 8.1. Three
+                             #   live finds fixed same day (chg-001, chg-002, fetch fallback
+                             #   + sweep single-flight).
 open_decisions:
   - id: od-1
     description: "U1 — where warm-boot input values come from. DECIDED 2026-08-17 (andrew): the scheduled default-branch workflow supplies TF_VAR_* for the warm build, mirroring the deploy workflow's contract; no static pool.inputs block. Static config was declined because artifact values (image tags) go stale per commit."

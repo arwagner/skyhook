@@ -18,7 +18,7 @@ readiness:
   plan:     ready            # plan + tasks written 2026-08-16
   tasks:    ready            # phase 4 (chg-001) built and verified 2026-08-17; chg-001 delta folded 2026-08-17
 gate:
-  analyze: pass              # 2026-08-17 re-gate after remediation: B2 display leg closed (escaping/non-linkification/sharp edge in the delta and D5); build waits on feat-001 16.4; see analyze.md
+  analyze: not-run           # reset 2026-08-17: chg-002 folded (AC-8, warm slots); re-gate on next dispatch
   product_global_hash: "sha256:a8932ef5ee1c"
   constitution_hash: "sha256:a045ce0c2437"
 human_signoff:

@@ -34,10 +34,11 @@ where the fresh claim sits today.
   alongside the existing listing widening. State: the `slot-*` workspaces' state prefixes are
   granted the way `pr-*` state is granted today — role-wide across the namespace, narrowed to
   the one claimed identity per session — because a claimed slot's re-apply must reach its own
-  Terraform state. No delete action anywhere in the slot namespace, which is what keeps slot
-  destruction cloud-refused to a pull-request run. Both grants are inert on a repository with
-  pooling off (no slot records or workspaces exist). Lands with feat-007's plan, which owns
-  the exact pattern language.
+  Terraform state, its lockfile deletes included (feat-007 chg-001 corrected the earlier
+  no-delete wording here: state mirrors `pr-*` exactly). What stays delete-free is the slot's
+  registry record and every protection mark — freeing a slot's name is cloud-refused to a
+  pull-request run. Both grants are inert on a repository with pooling off (no slot records
+  or workspaces exist). Landed with feat-007's build in the bootstrap Terraform.
 - Requirements affected: **the confinement paragraph** ("A pull request's credentials are
   confined to ephemeral environments…") — gains the namespace definition and the pre-claim
   read; **AC-19** — the issuance-time wording is amended so the acting narrowing is pinned
@@ -56,6 +57,6 @@ where the fresh claim sits today.
   feature for the sweep's pool phase, annotated on feat-007's manifest.
 
 ## Status
-- [ ] delta reviewed (analyze)
-- [ ] implemented & verified (lands with feat-007's build)
-- [ ] folded into spec.md
+- [x] delta reviewed (analyze) — 2026-08-17, blocking-hard then re-gated pass after the constitution's fourth exception landed
+- [x] implemented & verified — 2026-08-17, in feat-007's build, test-first, plus live on deadweight (warm claim, refresh, delete refusals)
+- [x] folded into spec.md — 2026-08-17 (AC-27 appended)

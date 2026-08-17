@@ -101,6 +101,16 @@ repo belongs to.
   credentials, serves the page locally and shows that repo's installation — no hosted or shared
   endpoint is created.
 
+- [ ] AC-8: A record in state `warm` renders as its own visible condition — distinguishable
+      at a glance from in-use, reclaimable, and protected: "warm — claimable" when it carries
+      a deployed commit, "warm — building" when it does not. A claimed slot (state `active`
+      with a claimant) shows its claimant's pull request number in the listing's PR column
+      and in the detail view, sourced from the record's claimant field; every other row keeps
+      deriving the number from the identity alone, and an identity that is neither `pr-<n>`
+      nor a claimed slot still renders with no number rather than a guessed one. The freeable
+      glance is unchanged: a warm slot is never shown reclaimable. Verified by rendering
+      fixtures through the pure model/renderer (chg-002, with skyhook feat-007).
+
 ## Open questions
 None. od-1 (access shape) was resolved 2026-08-16: a locally served page — see Known sharp edges.
 

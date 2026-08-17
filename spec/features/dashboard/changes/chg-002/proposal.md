@@ -23,6 +23,6 @@ existing S1 rule).
 - Beyond this feature: none.
 
 ## Status
-- [ ] delta reviewed (rides feat-007's gate)
+- [x] delta reviewed — rode feat-007's gate (pass 2026-08-17)
 - [x] implemented & verified — 2026-08-17, in feat-007's build, test-first
-- [ ] folded into spec.md (feat-007 task 8.2)
+- [x] folded into spec.md — 2026-08-17 (AC-8 appended)

@@ -21,9 +21,14 @@ against, the environment cap has nothing to count, and the dashboard has nothing
 
 ## Behavior & scenarios
 
-An **environment identity** names one environment (`staging`, `pr-482`); claiming is mutual
-exclusion on that name, not allocation from a pool. Identities are unique **within a repository**,
-not globally — two repositories may each have a `staging`.
+An **environment identity** names one environment (`staging`, `pr-482`, `slot-2`).
+Claiming takes one of two forms, and both are atomic. A **fresh claim** creates the record
+and is mutual exclusion on the name: it succeeds only if no record exists. A **pool claim**
+— available only where a repository has enabled pooling (feat-007) — takes over an
+environment that already exists: one conditional transition of a warm slot's record from
+`warm` to `active`, recording the **claimant** pull request; it succeeds only if the record
+was still `warm` at that version. Identities are unique **within a repository**, not
+globally — two repositories may each have a `staging`.
 
 **Where the identity comes from depends on who is asking.** A run triggered by a pull request does
 not choose its identity: it is derived from the trigger, so such a run can only ever name its own
@@ -51,8 +56,10 @@ This prototype assumes **one installation per repository**. The registry nonethe
 repository each environment belongs to, so that a later move to installations shared across
 repositories does not require migrating live data.
 
-An environment record is in exactly one **state**: `active` (in use, must not be destroyed) or
-`released` (eligible for teardown).
+An environment record is in exactly one **state**: `warm` (skyhook's own, built or being
+built ahead of any pull request, claimable once the record carries a deployed commit),
+`active` (in use, must not be destroyed), or `released` (eligible for teardown). Only
+pooling (feat-007) creates `warm` records; an installation with pooling off never holds one.
 
 **Protection is stored apart from the record**, not as a field within it. A protected environment
 may be `released` and still must not be destroyed automatically. Protection lives separately
@@ -64,9 +71,12 @@ thing standing in the way.
 **A record exists for exactly as long as its environment does.** Teardown deletes the record and
 its protection marker together, and that deletion is what frees the name. A protection marker with
 no matching record is itself garbage to be collected — left behind, it would silently attach to the
-next environment claiming that name, which would then never be cleaned up automatically. So an identity whose record still exists — in either state —
-cannot be claimed: a `released` environment has not been torn down yet, and handing its name to a
-new run while the old infrastructure still stands invites two runs acting on one environment.
+next environment claiming that name, which would then never be cleaned up automatically. So an identity whose record still exists — in any state —
+cannot be *freshly* claimed: a `released` environment has not been torn down yet, and handing
+its name to a new run while the old infrastructure still stands invites two runs acting on one
+environment. The pool claim is the sole exception, and it is not a counterexample: it creates
+nothing and hands over nothing torn-down — it transitions an existing `warm` record, whose
+environment stands ready precisely so a run can take it over, to `active` without deletion.
 
 - **Scenario: first installation**
   - Given a repository with no skyhook installation
@@ -197,13 +207,22 @@ new run while the old infrastructure still stands invites two runs acting on one
       protection mark. Within that namespace the credentials do not distinguish one pull request
       from another: a run that bypasses skyhook's validation could reach a different pull request's
       environment. That is a recorded decision rather than a gap awaiting a fix, and *Known sharp
-      edges* states what it costs.
+      edges* states what it costs. With pooling enabled, what the trigger derives is the run's
+      claimant identity; the environment the run acts on may be a warm slot whose own identity
+      was fixed when the slot was built, and the record's claimant — never the slot's name —
+      says which pull request that is (chg-012).
 - [ ] AC-15: Protection is stored outside the environment record, and a run triggered by a pull
       request cannot mark an environment protected. The attempt is refused by the credentials the
       run holds, not only by skyhook's code, and nothing stored changes.
-- [ ] AC-16: Claiming an identity whose record exists is refused, whether that record is `active`
-      or `released`, and the two refusals are distinguishable from each other. A name becomes
-      claimable only once its record is deleted.
+- [ ] AC-16: A fresh claim of an identity whose record exists is refused, whether that record is
+      `warm`, `active`, or `released`, and the three refusals are distinguishable: held (an
+      active tenant), awaiting teardown (a released one), and reserved for the pool (a warm
+      slot — reachable only by a default-branch or manual claim of a colliding name, since
+      pull-request runs never freshly claim slot names; the case exists so the collision is
+      named rather than mistaken for either other refusal). A name becomes freshly claimable
+      only once its record is deleted. The pool claim is not that refused case: it never
+      creates a record, and it succeeds precisely and only on a claimable `warm` record
+      (chg-012).
 - [ ] AC-17: The role a pull-request-triggered run assumes is refused by the cloud for every
       operation on an environment outside the ephemeral namespace — every long-running environment,
       every environment in another repository, and every write to the protection mark of any
@@ -352,6 +371,24 @@ new run while the old infrastructure still stands invites two runs acting on one
       variable — the operator redeploys to re-record, supplies the destroy by hand, or accepts
       the noise until teardown. Redaction removes; it never rewrites a value, because a redacted
       record must read as "value withheld", not as a different deploy. (Added by `chg-011`.)
+
+- [ ] AC-38: The registry exposes the pool claim as one conditional operation: given a
+      claimable warm slot's record at an observed version, it transitions `warm` → `active`
+      and records the claimant, or fails observably if the record moved. Claimability is
+      enforced at the registry layer, not by caller discipline: the operation refuses a
+      `warm` record with no deployed commit, so a build in progress can never be claimed.
+      Failure keeps the refused-versus-contended split fresh claims already have: a version
+      mismatch is a genuine loss (the caller moves to the next slot), while an inconclusive
+      collision is `contended` (the caller retries the same slot before moving on) — the same
+      reasoning as AC-5, because it is the same kind of conditional write. Under concurrent
+      attempts on the same slot exactly one succeeds — proven against the fake store's
+      contention and expressed through the store contract's compare-and-swap, never a
+      provider mechanism (chg-012).
+- [ ] AC-39: A `warm` record is distinguishable by inspection as build-in-progress (no
+      deployed commit) or claimable (deployed commit and URL present); after a pool claim the
+      record additionally carries its claimant, and every consumer that today derives a pull
+      request from the identity can obtain it from the claimant for pooled environments
+      (chg-012).
 
 ## Known sharp edges (prototype)
 - **Pull requests are not separated from each other by the cloud.** The role a pull-request run

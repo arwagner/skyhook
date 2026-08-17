@@ -50,6 +50,6 @@ behaviors stand on.
   product-global glossary amendment, and feat-007 itself, which owns every pool behavior.
 
 ## Status
-- [ ] delta reviewed (analyze)
-- [ ] implemented & verified (lands with feat-007's build)
-- [ ] folded into spec.md
+- [x] delta reviewed (analyze) — 2026-08-17, blocking then re-gated pass the same day
+- [x] implemented & verified — 2026-08-17, in feat-007's build, test-first, plus live on deadweight
+- [x] folded into spec.md — 2026-08-17 (AC-38/AC-39 appended; plan D2b amended)
