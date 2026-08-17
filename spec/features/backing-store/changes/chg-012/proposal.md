@@ -23,9 +23,10 @@ behaviors stand on.
 ## Blast radius
 
 - **Build ordering:** this delta folds only with feat-007's build, and nothing in feat-007 is
-  built before this delta, the sibling deploy-action delta (feat-002 `chg-009`), and
-  product-global's glossary amendment (its own main-branch commit) have all landed — feat-007
-  od-4, following the od-3 precedent from `chg-011`.
+  built before this delta, the sibling deploy-action delta (feat-002 `chg-009`),
+  product-global's glossary amendment, and the constitution's fourth named exception (both
+  main-branch commits, landed 2026-08-17) — feat-007 od-4, following the od-3 precedent from
+  `chg-011`.
 - Requirements affected: **the claiming paragraph** (Behavior & scenarios, "An environment
   identity names one environment…") — rewritten as Was/Now in the delta; **the state
   paragraph** ("exactly one state") — gains `warm`; **AC-16** — the refusal contract must say
@@ -35,7 +36,10 @@ behaviors stand on.
   claim).
 - Design decisions affected: the store contract already exposes compare-and-swap with opaque
   versions, so no new store primitive is required; the registry gains one operation composed
-  from it.
+  from it. **D2b is now wrong as written** — "claiming is therefore always create-if-absent,
+  with no state machine on top" holds for fresh claims only, and the pool claim is the
+  deliberate, named exception; amend D2b's prose when feat-007's plan lands the build. D2c's
+  refused-versus-contended reasoning extends to the pool claim unchanged (AC-38 says so).
 - Tasks affected: none regenerated now; build tasks arrive with feat-007's plan and are built
   in that one build, as the declared-inputs siblings were.
 - Already-built code affected (at build time, listed for honesty): the record type and its

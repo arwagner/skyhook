@@ -17,9 +17,9 @@ readiness:
   plan:     ready
   tasks:    ready            # phase 16 (chg-011) built and verified 2026-08-17; chg-011 delta folded 2026-08-17
 gate:
-  analyze: not-run           # reset 2026-08-17 by chg-012 (warm slots + pool claim delta); re-gate before the feat-007 build
-  product_global_hash: "sha256:a8932ef5ee1c"
-  constitution_hash: "sha256:a045ce0c2437"
+  analyze: pass              # 2026-08-17 re-gate after chg-012 remediations verified closed; see analyze.md
+  product_global_hash: "sha256:ccb9ae0efc1f"
+  constitution_hash: "sha256:6e2b3ffe7ec9"
 human_signoff:
   - id: hs-1
     description: "Verify against a real S3 bucket that conditional writes (If-None-Match / If-Match) give atomic claims under genuine concurrency. If they do not, the S3-only decision does not survive. Task 6.2."

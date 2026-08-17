@@ -1,6 +1,24 @@
 # Delta — deploy-action / chg-009 — against spec.md as of 2026-08-17
 
+> Vocabulary: this delta uses **claimant identity** for what the trigger derives about the run
+> (`pr-<n>`), and **environment identity** for the environment acted on — the same terms as the
+> sibling backing-store delta (chg-012), so the two read as one story. The pool claim itself is
+> licensed by the constitution's **fourth named exception** (Security & compliance, amended
+> 2026-08-17), which also prices what it costs.
+
 ## MODIFIED
+
+- **The opening definition** ("A **deploy** is one run of skyhook on behalf of one pull
+  request…") — the single-phase story needs the claimant/environment split.
+  - Was: "It derives the environment identity from the trigger, claims or refreshes that
+    environment's record, deploys the repository's infrastructure as an isolated copy
+    belonging to that identity, records the outcome, and hands back the environment's URL."
+  - Now: "It derives the run's claimant identity from the trigger; resolves its environment —
+    on a pooled repository, the warm slot it claims or already holds, otherwise an
+    environment named by the claimant identity itself — by claiming or refreshing that
+    environment's record; deploys the repository's infrastructure as an isolated copy
+    belonging to that environment identity; records the outcome; and hands back the
+    environment's URL." The order sentence stands unchanged.
 
 - **The confinement paragraph** (Behavior & scenarios, "A pull request's credentials are
   confined to ephemeral environments, and the cloud draws no line inside that.").
@@ -42,11 +60,12 @@
 ## ADDED
 
 - **AC-27:** On a pooled repository, the deploy path's order is observable as: declared-input
-  refusals first, then the slot-record read and pool claim (or fall-through to the fresh
-  claim), then the narrowing to the single resolved environment, and only then the
-  repository's apply — demonstrated with fake adapters by asserting the sequence, and on the
-  live installation by inspecting the narrowed request on both the warm and the cold path.
-  With pooling off, the sequence is byte-for-byte today's.
+  refusals first, then the slot-record read and pool claim; on fall-through, the cap check and
+  then the fresh claim (a pool claim creates no record and re-checks no cap; the fallback
+  creates one and is capped exactly as today); then the narrowing to the single resolved
+  environment, and only then the repository's apply — demonstrated with fake adapters by
+  asserting the sequence, and on the live installation by inspecting the narrowed request on
+  both the warm and the cold path. With pooling off, the sequence is byte-for-byte today's.
 
 ## REMOVED
 

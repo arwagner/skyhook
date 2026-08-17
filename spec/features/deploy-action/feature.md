@@ -17,9 +17,9 @@ readiness:
   plan:     ready
   tasks:    ready            # phase 13 (chg-008) built and verified 2026-08-17; chg-008 delta folded 2026-08-17
 gate:
-  analyze: not-run           # reset 2026-08-17 by chg-009 (slot namespace + pool-claim narrowing delta); re-gate before the feat-007 build
-  product_global_hash: "sha256:a8932ef5ee1c"
-  constitution_hash: "sha256:a045ce0c2437"
+  analyze: pass              # 2026-08-17 re-gate after chg-009 remediations: fourth exception landed in the constitution, B2 accepted-and-priced (backlog row 10); see analyze.md
+  product_global_hash: "sha256:ccb9ae0efc1f"
+  constitution_hash: "sha256:6e2b3ffe7ec9"
 converge:
   last_run: "2026-08-16"
   open: 0

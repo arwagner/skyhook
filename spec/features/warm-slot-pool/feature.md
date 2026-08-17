@@ -44,9 +44,9 @@ open_decisions:
     owner: "andrew"
     resolved: true
   - id: od-4
-    description: "Build-order gate: the three consciously reopened clauses must land before implementation — the backing-store change folder (pool claiming + the warm state), the product-global glossary amendment (ephemeral environment widened; warm slot and pool entries; privacy wording check), and the deploy-action credential-language widening for the slot namespace. Resolve only when all three are merged."
+    description: "Build-order gate: the reopened clauses must land before implementation. RESOLVED 2026-08-17 — all merged on main: backing-store chg-012 (pool claiming + warm state), deploy-action chg-009 (slot namespace + two-phase narrowing), the product-global glossary amendment (commit 790a429), and the constitution's fourth named exception (commit 554ccf2), which the pre-build gate added to the list. Both feature gates re-checked to pass the same day."
     owner: "andrew"
-    resolved: false
+    resolved: true
 overrides: []                # prototype-depth gate overrides; appended ONLY by flow at a STOP,
                              #   on explicit human instruction.
 extends:                     # cross-feature additive-extension annotations (§11.t) — advisory.

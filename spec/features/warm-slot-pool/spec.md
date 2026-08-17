@@ -17,7 +17,10 @@ is bound to no pull request yet, so the glossary entry must widen to cover it (p
 "an environment whose lifetime is bound to a pull request, or a warm slot staged to be claimed
 by one — both live in the ephemeral namespace"), and the glossary gains **warm slot** and
 **pool** entries. That amendment goes through product-global's own main-branch commit before
-this feature is built, exactly as the declared-deploy-inputs privacy amendment did.
+this feature is built, exactly as the declared-deploy-inputs privacy amendment did. The
+pre-build gate added a fourth: the constitution's list of named exceptions to what a
+pull-request run may reach gains the pool claim as its fourth entry, priced in the
+constitution's own voice — landed on main 2026-08-17, alongside the glossary amendment.
 
 ## Definitions (feature-local)
 
@@ -31,7 +34,9 @@ this feature is built, exactly as the declared-deploy-inputs privacy amendment d
 - **`warm`** — a new record state alongside `active` and `released`: the environment is
   skyhook's, built or being built, and belongs to no pull request. A warm record that carries a
   deployed commit is **claimable**; a warm record without one is a build in progress — or
-  wreckage, if a later scheduled pass finds it still commitless.
+  wreckage, if a later scheduled pass finds it still commitless. Claimability is the
+  registry's rule, not caller courtesy: the claim operation itself refuses a commitless
+  record, so a build in progress can never be claimed however a caller misbehaves.
 - **Claimant** — the pull request recorded on a slot's record when it is claimed. For a pooled
   environment the claimant, not the identity, says which pull request owns it.
 
@@ -142,7 +147,11 @@ assumption gets a working preview at a new URL and wasted warmth, not a broken o
 - **Scenario: the sweep clears wreckage conservatively**
   - Given a `warm` record with no deployed commit that this pass did not itself create
   - When the scheduled sweep runs
-  - Then it treats the slot as an interrupted build and destroys it
+  - Then it treats the slot as an interrupted build and destroys it — and every slot destroy,
+    this one included, begins with a version-bumping write releasing the record, so any claim
+    racing the destroy loses at the record instead of racing invisible cloud calls, and it
+    honors a protection mark exactly as every destroy does: a protected slot is reported, not
+    destroyed
   - And given a slot whose claimant's state cannot be determined (a failed lookup), the sweep
     leaves that slot alone and reports it, destroying only on a positive "closed" answer
 
@@ -181,7 +190,9 @@ assumption gets a working preview at a new URL and wasted warmth, not a broken o
 - [ ] AC-9: The pool phase builds at most one slot per pass, stops at the pool target, and at
   the cap builds nothing and reports the cap as the reason.
 - [ ] AC-10: A commitless `warm` record not created by the running pass is destroyed by that
-  pass; a slot whose claimant lookup fails is left standing and reported.
+  pass — after a version-bumping release write, and only if the identity carries no protection
+  mark; a protected slot and a slot whose claimant lookup fails are each left standing and
+  reported.
 - [ ] AC-11: Pull-request credentials can claim and then act only within the one slot claimed:
   an attempted slot build, an attempted destroy, and an attempted write to another slot's
   record are each refused — the first two by the cloud, the last by skyhook's narrowing —
@@ -219,12 +230,18 @@ assumption gets a working preview at a new URL and wasted warmth, not a broken o
   an open decision on the manifest so implementation cannot start ahead of it.
 - **Cap starvation is possible by configuration.** A pool target at or near the cap can leave
   no headroom for cold fallbacks; the sweep's report is the only alarm. Accepted at prototype.
+- **The claimant is self-reported, and slots can be seized.** The conditional claim fixes
+  which record and which version may change, not what is written into it, so a collaborator's
+  run can record a claimant that is not its own — misdirecting slot cleanup at a sibling's
+  preview — or loop the claim and hold every free slot. Both are collaborator-only abuses,
+  accepted at prototype depth and priced in the constitution's fourth named exception; pinning
+  the written claimant to the CI-asserted identity is the recorded enforcement to add at MVP
+  promotion (see the backlog's pool-claimant-enforcement row).
 
 ## Open questions
 
-- Whether the privacy enumeration in product-global needs "claimant pull request" named as a
-  datum, or whether the existing "pull request number" entry already covers it — settle in the
-  same main-branch commit as the glossary amendment.
+- ~~Privacy enumeration~~ — settled: product-global's amendment (main-branch commit
+  2026-08-17) names the claimant inside the existing pull-request-number entry.
 - The exact reserved identity prefix (`slot-` proposed here) is confirmed at plan time against
   the credential fence's real pattern language; the spec's requirement is only that the
   namespace is reserved, cloud-reachable by pull-request runs, and disjoint from `pr-<n>` and

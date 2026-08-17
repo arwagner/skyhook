@@ -25,8 +25,15 @@ where the fresh claim sits today.
 ## Blast radius
 
 - **Build ordering:** folds only with feat-007's build; nothing in feat-007 is built before
-  this delta, backing-store `chg-012`, and the product-global glossary amendment land —
+  this delta, backing-store `chg-012`, the product-global glossary amendment, and the
+  constitution's fourth named exception (both main-branch commits, landed 2026-08-17) —
   feat-007 od-4.
+- **Role layer (cloud), named per the hs-1 precedent:** the fourth exception must hold at the
+  role as well as the session, so the pull-request role's object grants widen to the
+  repository's slot records — read, and the conditional claim write, on `slot-<n>` registry
+  keys — alongside the existing listing widening. Nothing else at the role changes; the
+  grant is inert on a repository with pooling off (no slot records exist). Lands with
+  feat-007's plan, which owns the exact pattern language.
 - Requirements affected: **the confinement paragraph** ("A pull request's credentials are
   confined to ephemeral environments…") — gains the namespace definition and the pre-claim
   read; **AC-19** — the issuance-time wording is amended so the acting narrowing is pinned
