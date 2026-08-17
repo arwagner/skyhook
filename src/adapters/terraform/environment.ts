@@ -226,10 +226,13 @@ export class TerraformEnvironment implements EnvironmentDeployer, EnvironmentDes
     const hijack = detectStateHijack(directory);
     if (hijack !== null) return { ok: false, reason: 'skyhook-failed', problem: hijack };
 
+    // The recorded inputs land in the child process's environment object, never in a
+    // shell string and never as -var — the same discipline the credentials already ride
+    // (D6; feat-003 D5's chg-001 amendment). Terraform reads TF_VAR_* itself.
     const terraform = new Terraform({
       runner: this.#options.runner,
       directory,
-      env: this.#childEnv(),
+      env: { ...this.#childEnv(), ...tfVarsFor(request.deployInputs) },
     });
 
     try {
@@ -414,6 +417,18 @@ export class TerraformEnvironment implements EnvironmentDeployer, EnvironmentDes
       return null;
     }
   }
+}
+
+/**
+ * The recorded inputs as Terraform's own environment convention. Names were validated at
+ * config-parse time to the identifier class, so none can collide with a credential or
+ * AWS-meaningful variable — `TF_VAR_` prefixes every one.
+ */
+function tfVarsFor(
+  inputs: Readonly<Record<string, string>> | null | undefined,
+): Record<string, string> {
+  if (inputs === null || inputs === undefined) return {};
+  return Object.fromEntries(Object.entries(inputs).map(([name, value]) => [`TF_VAR_${name}`, value]));
 }
 
 /** Where this environment's state must end up, as a key within the bucket. */

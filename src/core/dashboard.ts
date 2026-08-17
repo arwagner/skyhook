@@ -136,9 +136,30 @@ ${field('Protected', row.isProtected ? 'yes' : 'no')}
 ${field('Deployed commit', record.deployedCommit === null ? PENDING : `<code>${escapeHtml(record.deployedCommit)}</code>`)}
 ${field('Created', escapeHtml(record.createdAt))}
 ${field('Updated', escapeHtml(record.updatedAt))}
-${field('URL', urlCell(record.url))}
+${field('URL', urlCell(record.url))}${deployInputRows(record.deployInputs, field)}
 </dl>
 </section>`;
+}
+
+/**
+ * The recorded deploy inputs, when the record carries any — one line per input, sorted
+ * by name so the render is deterministic whatever key order the stored JSON held.
+ *
+ * These values are the field the hostile-content rule exists for: attacker-suppliable
+ * by design, so name and value are both escaped, and a value is NEVER linkified however
+ * much it looks like a URL (chg-001; plan D5). Shown as plain wrapped text, full length.
+ * A record without them renders nothing here — not a pending placeholder, because no
+ * later step fills them in: a record without them never declared any.
+ */
+function deployInputRows(
+  inputs: Readonly<Record<string, string>> | null,
+  field: (name: string, value: string) => string,
+): string {
+  if (inputs === null) return '';
+  return Object.keys(inputs)
+    .sort()
+    .map((name) => `\n${field(`Input ${escapeHtml(name)}`, `<code>${escapeHtml(inputs[name] ?? '')}</code>`)}`)
+    .join('');
 }
 
 const STYLE = `body { font-family: system-ui, sans-serif; margin: 2rem auto; max-width: 72rem; padding: 0 1rem; }

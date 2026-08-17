@@ -450,3 +450,63 @@ test('record-only removal never touches the protection prefix', async () => {
   assert.equal(result.kind, 'destroyed');
   assert.equal(fakeStore.rawValue(registryKeyFor(REPO, ID)), undefined);
 });
+
+// --- the destroy replays the recorded inputs (chg-001) ------------------------
+
+function recordWithInputs(state: EnvironmentState): string {
+  return JSON.stringify({
+    schemaVersion: 1,
+    repository: REPO,
+    identity: ID,
+    state,
+    deployedCommit: 'a1b2c3d4',
+    url: null,
+    deployInputs: { image_tag: 'a1b2c3d4', speech_image: 'ecr/speech:1' },
+    createdAt: '2026-08-15T00:00:00.000Z',
+    updatedAt: '2026-08-15T00:00:00.000Z',
+  });
+}
+
+test('feat-003/AC-15 the destroy receives the recorded inputs; a record without them destroys with none', async () => {
+  const withInputs = harness();
+  withInputs.store.seed(registryKeyFor(REPO, ID), recordWithInputs('released'));
+  withInputs.store.seed(`${stateDirFor(REPO, ID)}terraform.tfstate`, '{"resources":[]}');
+  const done = await teardownEnvironment(withInputs.ports, { repository: REPO, identity: ID });
+  assert.equal(done.kind, 'destroyed');
+  assert.deepEqual(withInputs.destroyer.requests[0]?.deployInputs, {
+    image_tag: 'a1b2c3d4',
+    speech_image: 'ecr/speech:1',
+  });
+
+  // The unchanged path: every record written before recording existed.
+  const without = harness();
+  seedEnvironment(without.store, 'released');
+  const doneWithout = await teardownEnvironment(without.ports, { repository: REPO, identity: ID });
+  assert.equal(doneWithout.kind, 'destroyed');
+  assert.equal(without.destroyer.requests[0]?.deployInputs ?? null, null);
+});
+
+test('feat-003/AC-15 feat-001/AC-37 a redaction mid-teardown is not a reactivation and is not lost', async () => {
+  // The redact lands while the destroy is executing — after the release, before the
+  // re-confirm. It bumps the record's version without touching its state, so the
+  // teardown must complete (state is the reactivation key, not version identity), and
+  // the redaction itself must succeed rather than be surfaced as a lost race.
+  const store = new FakeStore();
+  const registry = new Registry(store, { now: fixedClock() });
+  store.seed(registryKeyFor(REPO, ID), recordWithInputs('released'));
+  store.seed(`${stateDirFor(REPO, ID)}terraform.tfstate`, '{"resources":[]}');
+
+  let redactOutcome = false;
+  const destroyer = new FakeDestroyer({
+    onDestroy: async () => {
+      redactOutcome = (await registry.redactInput(REPO, ID, 'speech_image')).ok;
+    },
+  });
+  const ports: TeardownPorts = { registry, destroyer, store, markerRemoval: 'with-record' };
+
+  const done = await teardownEnvironment(ports, { repository: REPO, identity: ID });
+
+  assert.equal(redactOutcome, true, 'the redaction was not lost');
+  assert.equal(done.kind, 'destroyed', 'a content-only write never reads as a reactivation');
+  assert.equal(store.rawValue(registryKeyFor(REPO, ID)), undefined, 'the record is removed');
+});

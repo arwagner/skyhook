@@ -39,6 +39,16 @@ export interface EnvironmentRecord {
    * recorded, and the registry is the only thing that knows they need tearing down.
    */
   readonly url: string | null;
+  /**
+   * The recorded values of the repository's declared deploy inputs — name to value — or
+   * null before a deploy that declared any has landed (chg-011, AC-36). Updated exactly
+   * when `deployedCommit` is, as a wholesale replace, so the values and the commit
+   * always describe the same landed deploy.
+   *
+   * Additive like `url`: a record written before this field existed reads back with
+   * null, and every reader treats that as "none recorded".
+   */
+  readonly deployInputs: Readonly<Record<string, string>> | null;
   /** ISO-8601 UTC. */
   readonly createdAt: string;
   /** ISO-8601 UTC. */
@@ -86,6 +96,13 @@ export interface DeployConfig {
    * repository's own declaration and never from a value typed here (plan D4).
    */
   readonly rolePrefix: string;
+  /**
+   * The declared deploy inputs: names of the variables a deploy carries and skyhook
+   * records (chg-011, AC-35). Empty when the repository declares none. Validation —
+   * shape, count, sensitivity — happened at parse time; a name in here is one a deploy
+   * may read, record, and a destroy may replay.
+   */
+  readonly inputs: readonly string[];
 }
 
 /** The settings a consuming repo supplies in `.skyhook/config.yml`. */

@@ -1,0 +1,6 @@
+{
+  "pull_request": {
+    "number": 482,
+    "head": { "sha": "a1b2c3d4e5", "repo": { "full_name": "acme/widgets" } }
+  }
+}

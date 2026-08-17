@@ -1,6 +1,7 @@
 /**
  * A parser for the small, strict subset of YAML that skyhook's own config file uses:
- * nested maps of scalars, two-space indentation, `#` comments. Nothing else.
+ * nested maps of scalars, flat lists of scalars (`- item` lines under a key; chg-011,
+ * for `deploy.inputs`), two-space indentation, `#` comments. Nothing else.
  *
  * Deliberately not a YAML implementation. It refuses anything outside the subset with
  * a message naming the line, rather than guessing — this file gates the environment cap,
@@ -10,7 +11,7 @@
  */
 
 export type YamlScalar = string | number | boolean | null;
-export type YamlValue = YamlScalar | YamlMap;
+export type YamlValue = YamlScalar | YamlMap | readonly YamlScalar[];
 export interface YamlMap {
   readonly [key: string]: YamlValue;
 }
@@ -21,10 +22,22 @@ export type YamlOutcome =
 
 const INDENT_WIDTH = 2;
 
+interface Frame {
+  indent: number;
+  map: Record<string, YamlValue>;
+  /**
+   * Where this frame's block hangs in its parent, so an empty block just opened by
+   * `key:` can be converted in place to a list when its first `- item` line arrives.
+   */
+  parent?: { map: Record<string, YamlValue>; key: string };
+  /** Set once the block turned out to be a list. Further `key:` lines are then refused. */
+  list?: YamlScalar[];
+}
+
 export function parseYamlSubset(document: string): YamlOutcome {
   const problems: string[] = [];
   const root: Record<string, YamlValue> = {};
-  const stack: { indent: number; map: Record<string, YamlValue> }[] = [{ indent: 0, map: root }];
+  const stack: Frame[] = [{ indent: 0, map: root }];
 
   document.split('\n').forEach((rawLine, index) => {
     const lineNumber = index + 1;
@@ -43,7 +56,34 @@ export function parseYamlSubset(document: string): YamlOutcome {
 
     const content = line.slice(indent);
     if (content.startsWith('- ')) {
-      problems.push(`line ${lineNumber}: lists are not supported`);
+      while (stack.length > 1 && indent < (stack.at(-1)?.indent ?? 0)) stack.pop();
+      const frame = stack.at(-1);
+      if (frame === undefined) return;
+      // A list may only fill a block a `key:` line just opened (or continue one this
+      // parse already recognized). A bare list at the root, or one interleaved with
+      // map keys, is outside the subset and refused rather than guessed at.
+      const convertible =
+        frame.list !== undefined ||
+        (frame.parent !== undefined && Object.keys(frame.map).length === 0);
+      if (indent !== frame.indent || !convertible) {
+        problems.push(`line ${lineNumber}: a list is only supported directly under a key`);
+        return;
+      }
+      const item = stripComment(content.slice(2).trim());
+      if (/^\S+:(\s|$)/.test(item)) {
+        problems.push(`line ${lineNumber}: nested maps inside lists are not supported`);
+        return;
+      }
+      const scalar = parseScalar(item, lineNumber);
+      if (typeof scalar === 'object' && scalar !== null) {
+        problems.push(scalar.problem);
+        return;
+      }
+      if (frame.list === undefined) {
+        frame.list = [];
+        if (frame.parent !== undefined) frame.parent.map[frame.parent.key] = frame.list;
+      }
+      frame.list.push(scalar);
       return;
     }
 
@@ -61,6 +101,10 @@ export function parseYamlSubset(document: string): YamlOutcome {
     while (stack.length > 1 && indent < (stack.at(-1)?.indent ?? 0)) stack.pop();
     const frame = stack.at(-1);
     if (frame === undefined) return;
+    if (frame.list !== undefined) {
+      problems.push(`line ${lineNumber}: expected another "- item" or a shallower key`);
+      return;
+    }
     if (indent !== frame.indent) {
       problems.push(`line ${lineNumber}: unexpected indentation`);
       return;
@@ -74,7 +118,7 @@ export function parseYamlSubset(document: string): YamlOutcome {
     if (rest === '') {
       const child: Record<string, YamlValue> = {};
       frame.map[key] = child;
-      stack.push({ indent: indent + INDENT_WIDTH, map: child });
+      stack.push({ indent: indent + INDENT_WIDTH, map: child, parent: { map: frame.map, key } });
       return;
     }
     const scalar = parseScalar(rest, lineNumber);

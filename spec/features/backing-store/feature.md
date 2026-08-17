@@ -15,7 +15,7 @@ readiness:
   design:   n/a              # design stage is off for this workspace
   spec:     ready
   plan:     ready
-  tasks:    draft            # phase 16 (chg-011) written 2026-08-17, unbuilt; everything prior built, verified and folded
+  tasks:    ready            # phase 16 (chg-011) built and verified 2026-08-17; chg-011 delta awaits fold
 gate:
   analyze: pass              # 2026-08-17 re-gate after remediation: B1/B2 closed (B2 residual is a stated MVP cliff); build order 16.4 first; see analyze.md
   product_global_hash: "sha256:a8932ef5ee1c"

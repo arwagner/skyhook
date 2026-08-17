@@ -144,7 +144,14 @@ export async function teardownEnvironment(
   if (beforeDestroy === 'reactivated') return { kind: 'reactivated', notes: [] };
   if (beforeDestroy !== 'proceed') return beforeDestroy;
 
-  const destroyed = await ports.destroyer.destroy({ repository, identity });
+  // The recorded inputs ride along, read from the record at entry: they change only when
+  // a deploy lands, and a deploy landing after that read is a reactivation this teardown
+  // stops for anyway (chg-001, AC-15).
+  const destroyed = await ports.destroyer.destroy({
+    repository,
+    identity,
+    deployInputs: initial.record.deployInputs,
+  });
   if (!destroyed.ok) {
     return {
       kind: 'failed',

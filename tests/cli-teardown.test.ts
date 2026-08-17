@@ -334,3 +334,25 @@ test('feat-006/AC-8 gap-002: protected refuses non-zero at the CLI seam; cleared
   assert.equal(succeeded, 0);
   assert.match(out.lines.join(' '), /Destroyed staging/);
 });
+
+test('feat-003/AC-15 feat-001/AC-37 the MANUAL starter replays recorded inputs — verified, not assumed shared', async () => {
+  // feat-006's own precedent for shared-machinery changes: the third starter gets its
+  // own regression rather than inheriting the claim from the close and sweep tests.
+  const { store, registry, destroyer, open } = seededAccess();
+  const key = registryKeyFor('acme/widgets', 'staging');
+  const seeded = JSON.parse(store.rawValue(key) ?? '{}') as Record<string, unknown>;
+  store.seed(key, JSON.stringify({ ...seeded, deployInputs: { image_tag: 'a1b2c3d4' } }));
+  void registry;
+
+  const code = await teardown({
+    env: dispatchEnv(),
+    runner: silentRunner,
+    out: collect().sink,
+    err: collect().sink,
+    fetch: configFetch,
+    openManualAccess: open,
+  });
+
+  assert.equal(code, 0);
+  assert.deepEqual(destroyer.requests[0]?.deployInputs, { image_tag: 'a1b2c3d4' });
+});

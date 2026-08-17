@@ -48,9 +48,16 @@ inputs:
     default: ${{ github.token }}
   command:
     description: >-
-      Which manual verb a workflow_dispatch run performs: `teardown`, `protect`, or
-      `unprotect`. Pass your workflow's dispatch input through here; other events ignore it —
+      Which manual verb a workflow_dispatch run performs: `teardown`, `protect`, `unprotect`,
+      or `redact`. Pass your workflow's dispatch input through here; other events ignore it —
       what triggered the run, not this input, decides between deploy, teardown and sweep.
+    required: false
+    default: ''
+  input-name:
+    description: >-
+      For `redact` only: the declared deploy input whose recorded value should be removed
+      from the environment's record. Redaction removes the one value and touches nothing
+      else — the containment path for a secret recorded by mistake.
     required: false
     default: ''
   environment:
@@ -111,6 +118,7 @@ runs:
       env:
         GITHUB_TOKEN: ${{ inputs.github-token }}
         SKYHOOK_ENVIRONMENT: ${{ inputs.environment }}
+        SKYHOOK_INPUT_NAME: ${{ inputs.input-name }}
         SKYHOOK_COMMAND: >-
           ${{ github.event_name == 'schedule' && 'sweep'
            || github.event_name == 'workflow_dispatch' && inputs.command

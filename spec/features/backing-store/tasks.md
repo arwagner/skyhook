@@ -533,15 +533,17 @@ catch it — the code-vs-spec audit — is advisory at prototype depth and would
       2026-08-17 as main commit 783fcc8, authorized by andrew; every gate was re-stamped against
       the amended hash the same day, so nothing went stale. The build is unblocked.
       Files: `spec/product-global.md`.
-- [ ] 16.1 `deploy.inputs` parses: an optional list of at most 16 names under `deploy`, refused
+- [x] 16.1 (2026-08-17) `deploy.inputs` parses: an optional list of at most 16 names under `deploy`, refused
       by name when a name misses the `[a-zA-Z_][a-zA-Z0-9_-]*` shape (the generic class only —
       no Terraform knowledge enters core; a Terraform-reserved name is Terraform's own loud
       refusal at first use), appears twice, or contains `secret`/`password`/`token`/`key`/
       `credential` case-insensitively without a matching `deploy.allow_sensitive_input_names`
       entry; unknown-keys discipline unchanged; every command that does not deploy or destroy
       never reads it. Trace `feat-001/AC-35` in `tests/config.test.ts`.
-      Files: `src/core/types.ts`, `src/core/config.ts`, `tests/config.test.ts`.
-- [ ] 16.2 The record carries recorded input values (name → value), absent-tolerant in both
+      Files: `src/core/types.ts`, `src/core/config.ts`, `tests/config.test.ts` — plus
+      `src/core/yaml.ts`, unlisted in the proposal: the subset parser refused lists outright, so
+      it learned flat scalar lists (`- name` under a key), still refusing everything else loudly.
+- [x] 16.2 (2026-08-17) The record carries recorded input values (name → value), absent-tolerant in both
       directions: old records read cleanly, and a record without the field means "none recorded".
       Updates replace the whole map. The 512-character/no-control-characters value rule is
       enforced where a value is supplied (feat-002's refusal, task 12.1), and the registry
@@ -549,12 +551,12 @@ catch it — the code-vs-spec audit — is advisory at prototype depth and would
       `tests/fake-store.ts`.
       Files: `src/core/types.ts`, `src/core/registry.ts`, `tests/registry.test.ts`,
       `tests/fake-store.ts`.
-- [ ] 16.3 The seeded settings file states, beside `deploy.inputs`, that declared values are
+- [x] 16.3 (2026-08-17, seeded doc lives in src/cli/init.ts, not install.ts) The seeded settings file states, beside `deploy.inputs`, that declared values are
       recorded in the registry in the clear and shown wherever the record is shown — the warning
       written where the operator declares the name. Trace `feat-001/AC-35` in
       `tests/install.test.ts`.
       Files: `src/core/install.ts`, `tests/install.test.ts`.
-- [ ] 16.5 `skyhook redact <environment> <name>` removes one recorded value from the record,
+- [x] 16.5 (2026-08-17; plus action.yml: `redact` on the command input, `input-name` → SKYHOOK_INPUT_NAME; new tests/cli-redact.test.ts) `skyhook redact <environment> <name>` removes one recorded value from the record,
       touching nothing else — the manual-dispatch surface protect and unprotect already ride,
       routed to no pull-request event (a guardrail, stated as such). Redaction removes, never
       rewrites; it writes read–CAS–retry like every mutator, and changes content, never state —

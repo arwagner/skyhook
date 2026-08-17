@@ -57,7 +57,7 @@ Glyphs: `[x]` done · `[ ]` not started · `[~]` in progress · `[-]` n/a · `[H
 > feat-003 Phase 7. **Ordering:** feat-001 task 16.4 (the product-global amendment, od-3) lands
 > before any of this is built.
 
-- [ ] 4.1 The detail view renders the record's deploy inputs when it carries any — one line per
+- [x] 4.1 (2026-08-17) The detail view renders the record's deploy inputs when it carries any — one line per
       input, sorted by name, name and value both HTML-escaped per D5's hostile-content rule,
       never linkified whatever the value looks like, plain wrapped text with no truncation — and
       renders nothing for them (no pending placeholder) when it does not; the list view is

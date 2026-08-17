@@ -189,6 +189,17 @@ export interface DestroyRequest {
    * at another's environment (plan D2, the identity invariant).
    */
   readonly identity: string;
+  /**
+   * The record's recorded deploy-input values, replayed into the destroy (chg-001,
+   * AC-15) — the recorded values, not the current declared list, by the same reasoning
+   * that runs the destroy at the recorded commit. Absent or null destroys with none
+   * set, which is every record written before recording existed.
+   *
+   * Body-derived, unlike the identity, and safely so: the values feed only this same
+   * environment's own destroy, and the run that owns the record already controlled them
+   * at deploy time. The identity invariant above is untouched.
+   */
+  readonly deployInputs?: Readonly<Record<string, string>> | null;
 }
 
 export type DestroyOutcome =

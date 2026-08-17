@@ -875,12 +875,12 @@ let it drift unnoticed.
 > Phase 7 (the replay) and feat-005 Phase 4 (the display). **Ordering:** feat-001 task 16.4 (the
 > product-global amendment, od-3) lands before any of this is built.
 
-- [ ] 12.1 A deploy reads `TF_VAR_<name>` for each declared name after config, before the cap
+- [x] 12.1 (2026-08-17; the TF_VAR_ prefix lives in src/adapters/terraform/inputs.ts behind the DeclaredInputSource port, so core stays provider-agnostic) A deploy reads `TF_VAR_<name>` for each declared name after config, before the cap
       count and the claim; a missing, empty (the empty string exactly), or value-rule-violating
       input is refused there, naming the variable — no record written, nothing applied. Trace
       `feat-002/AC-22` in `tests/deploy.test.ts`, and in `tests/deploy-command.test.ts` assert
       the refusal maps to exit 1, distinct from the consumer-apply exit 3.
-- [ ] 12.2 Recorded values follow the apply exactly as the commit does: updated together on
+- [x] 12.2 (2026-08-17) Recorded values follow the apply exactly as the commit does: updated together on
       success, both untouched on a failed apply, and a repository declaring none deploys exactly
       as before. Trace `feat-002/AC-23` in `tests/deploy.test.ts` and
       `tests/deploy-command.test.ts`.

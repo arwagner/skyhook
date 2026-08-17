@@ -161,3 +161,26 @@ test('a destroyer built without a definition directory refuses rather than guess
   assert.equal(outcome.ok, false);
   assert.equal(runner.calls.length, 0);
 });
+
+test('feat-003/AC-15 recorded inputs reach the destroy as TF_VAR_ environment, never as -var or a shell string', async () => {
+  const dir = definitionDirectory();
+  const runner = new RecordingRunner();
+
+  const outcome = await destroyerUnder(dir, runner).destroy({
+    repository: REPO,
+    identity: ID,
+    deployInputs: { image_tag: 'a1b2c3d4', speech_image: 'ecr/speech:1' },
+  });
+
+  assert.equal(outcome.ok, true);
+  const destroy = runner.calls.find((c) => c.args[0] === 'destroy');
+  assert.ok(destroy !== undefined);
+  // The child process environment object is the transport (D5's amendment) — the same
+  // discipline D6 applies to credentials, and no argv carries a value.
+  assert.equal(destroy.options?.env?.['TF_VAR_image_tag'], 'a1b2c3d4');
+  assert.equal(destroy.options?.env?.['TF_VAR_speech_image'], 'ecr/speech:1');
+  for (const call of runner.calls) {
+    assert.equal(call.args.includes('-var'), false, `-var passed in: ${call.args.join(' ')}`);
+    assert.equal(call.args.some((a) => a.includes('a1b2c3d4')), false, 'a value leaked into argv');
+  }
+});

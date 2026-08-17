@@ -131,7 +131,7 @@ code they cover, per the house pattern.
 > feat-005 Phase 4. **Ordering:** feat-001 task 16.4 (the product-global amendment, od-3) lands
 > before any of this is built.
 
-- [ ] 7.1 Every destroy path — close fast path, sweep, manual — sets `TF_VAR_<name>` for each
+- [x] 7.1 (2026-08-17) Every destroy path — close fast path, sweep, manual — sets `TF_VAR_<name>` for each
       recorded input value before the definition runs in the scratch checkout, via the child
       process's environment object, never a shell string; a record carrying none destroys with
       none set; a required variable on such a record fails loudly and is retried (AC-9's sweep
@@ -139,7 +139,7 @@ code they cover, per the house pattern.
       `tests/teardown.test.ts`, `tests/sweep.test.ts`, `tests/terraform-destroy.test.ts`, and —
       so the manual starter is verified rather than assumed shared — a regression in
       `tests/cli-teardown.test.ts`, feat-006's own precedent for shared-machinery changes.
-- [ ] 7.2 A redaction landing mid-teardown (feat-001/AC-37) is not a reactivation: the teardown's
+- [x] 7.2 (2026-08-17; the re-confirm already keyed on state — the test pins it so it stays that way) A redaction landing mid-teardown (feat-001/AC-37) is not a reactivation: the teardown's
       re-confirm keys on the record's state, so a redaction-only write — content changed, state
       still `released` — neither aborts the destroy as "reactivated" nor is silently lost.
       Trace `feat-003/AC-15` (and cite `feat-001/AC-37`) in `tests/teardown.test.ts` with a fake
