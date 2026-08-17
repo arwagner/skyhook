@@ -303,6 +303,14 @@ test('feat-002/AC-21 the seeded settings file parses as written, with every blan
 
     // The rule itself is stated in the file, because the file is where someone reads it.
     assert.match(document, /THIS FILE IS YOURS/);
+
+    // feat-007 (found live): the sweep's single-flight discipline is the workflow's
+    // concurrency block — one sweep lane, per-ref lanes for everything else, never
+    // cancel-in-progress.
+    const workflow = readFileSync(join(root, '.skyhook/workflow.yml'), 'utf8');
+    assert.match(workflow, /concurrency:/);
+    assert.match(workflow, /'sweep' \|\| github\.ref/);
+    assert.match(workflow, /cancel-in-progress: false/);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

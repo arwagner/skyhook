@@ -238,6 +238,16 @@ permissions:
   id-token: write
   pull-requests: read
 
+# Single-flight, two lanes (found live — feat-007 task 8.1): every sweep shares one lane,
+# because the sweep's wreckage rule ("a commitless warm record is an interrupted build")
+# rests on passes not overlapping — two concurrent sweeps each built a slot. Everything
+# else queues per ref, so two pushes to one pull request cannot race each other while
+# different pull requests still run in parallel. Never cancel-in-progress: a killed
+# teardown or half-applied deploy is exactly the wreckage the sweep exists to clear.
+concurrency:
+  group: skyhook-\${{ (github.event_name == 'schedule' || inputs.command == 'sweep') && 'sweep' || github.ref }}
+  cancel-in-progress: false
+
 jobs:
   skyhook:
     runs-on: ubuntu-latest

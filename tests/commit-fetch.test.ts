@@ -86,3 +86,24 @@ test('a record with no commit fetches the pull request head', async () => {
   const fetch = runner.calls.find((c) => c.args.includes('fetch'));
   assert.ok(fetch?.args.includes('refs/pull/9/head'));
 });
+
+test('feat-007/AC-10 an environment bound to no pull request falls back to the default branch HEAD', async () => {
+  // Found live (task 8.1): a wreckage slot has no commit and no pull request, and the old
+  // fallback fetched the nonsense refs/pull/0/head — so every wreckage clear failed.
+  const calls: string[][] = [];
+  const runner: CommandRunner = {
+    run: async (command, args) => {
+      calls.push([command, ...args]);
+      return { code: 0, stdout: '', stderr: '' };
+    },
+  };
+  const outcome = await fetchDefinition(
+    { runner, repository: 'acme/widgets', scratchDir: scratch() },
+    { commit: null, pullRequestNumber: null },
+  );
+  assert.ok(outcome.ok);
+  const fetch = calls.find((c) => c.includes('fetch'));
+  assert.ok(fetch !== undefined);
+  assert.equal(fetch[fetch.length - 1], 'HEAD', 'the fallback ref is the default branch HEAD');
+  assert.ok(!fetch.join(' ').includes('refs/pull/'), 'never a pull ref for a slot');
+});

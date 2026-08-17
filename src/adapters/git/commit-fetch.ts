@@ -35,8 +35,14 @@ export interface CommitFetchOptions {
 export interface FetchTarget {
   /** The recorded commit of the last successful apply, or null if none ever landed. */
   readonly commit: string | null;
-  /** The pull request the environment is bound to — its head ref is the fallback. */
-  readonly pullRequestNumber: number;
+  /**
+   * The pull request the environment is bound to — its head ref is the fallback — or
+   * null for an environment bound to none: a long-running environment, or a warm slot,
+   * both deployed from the default branch, whose HEAD is then the fallback. Found live
+   * (feat-007 task 8.1): a slot teardown with no usable commit used to fall back to the
+   * nonsense `refs/pull/0/head` and fail every wreckage clear.
+   */
+  readonly pullRequestNumber: number | null;
 }
 
 export type FetchOutcome =
@@ -77,8 +83,9 @@ export async function fetchDefinition(
   // record that predates any successful apply. GitHub keeps pull-request heads fetchable
   // after branch deletion, which is what makes the fallback (and usually the commit
   // itself) reachable at all.
-  const pullHeadRef = `refs/pull/${target.pullRequestNumber}/head`;
-  const attempts: string[] = target.commit !== null ? [target.commit, pullHeadRef] : [pullHeadRef];
+  const fallbackRef =
+    target.pullRequestNumber !== null ? `refs/pull/${target.pullRequestNumber}/head` : 'HEAD';
+  const attempts: string[] = target.commit !== null ? [target.commit, fallbackRef] : [fallbackRef];
 
   let fetched: string | null = null;
   const failures: string[] = [];
@@ -94,7 +101,11 @@ export async function fetchDefinition(
     return {
       ok: false,
       problem:
-        `the definition for pull request #${target.pullRequestNumber} could not be fetched from ` +
+        `the definition for ${
+          target.pullRequestNumber !== null
+            ? `pull request #${target.pullRequestNumber}`
+            : 'this environment (default-branch fallback)'
+        } could not be fetched from ` +
         `${options.repository} (${failures.join('; ')}). Without a definition there is nothing to ` +
         'run the destroy with; this environment needs a human look.',
     };

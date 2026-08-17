@@ -116,7 +116,10 @@ export async function sweep(options: SweepOptions): Promise<number> {
         const commit = read.ok && read.record !== null ? read.record.deployedCommit : null;
         return destroyerFor(identity, {
           commit,
-          pullRequestNumber: pullRequestNumberFor(identity) ?? 0,
+          // Null for a slot or any non-PR identity: the fallback is then the default
+          // branch's HEAD — what those environments deploy — never refs/pull/0/head
+          // (found live, feat-007 task 8.1).
+          pullRequestNumber: pullRequestNumberFor(identity),
         });
       },
     },

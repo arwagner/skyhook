@@ -282,7 +282,8 @@ async function manualTeardown(
 
   const acquired = await destroyerFor(identity, {
     commit: existing.record.deployedCommit,
-    pullRequestNumber: pullRequestNumberFor(identity) ?? 0,
+    // Null for a long-running name: the fetch falls back to the default branch's HEAD.
+    pullRequestNumber: pullRequestNumberFor(identity),
   });
   if (!acquired.ok) {
     options.err(`skyhook teardown: ${acquired.problem}`);
