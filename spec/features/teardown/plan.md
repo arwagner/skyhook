@@ -157,6 +157,16 @@ still destroyed — Terraform destroys from state, and D6 step 4 refuses to proc
 names anything — so the residue class is resources that never reached state, which the deploy
 plan's D6a already bounds. Prototype accepts this; mvp revisits the anchor.
 
+*(Amended by `chg-001`: the scratch checkout's destroy runs with `TF_VAR_<name>` set for each
+deploy-input value the record carries — the recorded values, not the current declared list, by
+the same reasoning that runs the destroy at the recorded commit rather than at today's. The
+values are injected through the child process's environment object, never assembled into a shell
+string — the same discipline D4/feat-002-D6 already applies to credentials, stated here because
+these are the first attacker-influenced strings skyhook itself places into that environment. A
+record carrying none destroys with none set, unchanged — which also covers the no-commit record
+above: per feat-001/AC-36 a record with no landed apply has no recorded inputs either, so it
+falls into the "none recorded" branch by construction.)*
+
 ### D6 — The teardown sequence, and who removes what
 One environment's teardown, both paths, in order:
 

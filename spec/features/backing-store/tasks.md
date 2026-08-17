@@ -521,3 +521,45 @@ catch it — the code-vs-spec audit — is advisory at prototype depth and would
       list-prefix entry, and the deny-outside exemption; the registry gained `removeRecord()` and
       `listIdentities()`. Implemented under feat-003's task 5.2, 2026-08-16; asserted in
       `tests/bootstrap-terraform.test.ts` and `tests/registry.test.ts`.
+
+## Phase 16 — declared deploy inputs: the contract (authorized by `chg-011`)
+
+> Built in the joint declared-inputs branch alongside feat-002 Phase 12, feat-003 Phase 7 and
+> feat-005 Phase 4 — one build, four recorded changes, the shape Phase 11 set. **Ordering:** 16.4
+> lands before any of the rest is built (the pre-build check's B1).
+
+- [x] 16.4 [H] `product-global.md`'s privacy enumeration gains "declared deploy input values", in
+      its own main-branch commit, never inside this change — od-3 on the manifest. LANDED
+      2026-08-17 as main commit 783fcc8, authorized by andrew; every gate was re-stamped against
+      the amended hash the same day, so nothing went stale. The build is unblocked.
+      Files: `spec/product-global.md`.
+- [ ] 16.1 `deploy.inputs` parses: an optional list of at most 16 names under `deploy`, refused
+      by name when a name misses the `[a-zA-Z_][a-zA-Z0-9_-]*` shape (the generic class only —
+      no Terraform knowledge enters core; a Terraform-reserved name is Terraform's own loud
+      refusal at first use), appears twice, or contains `secret`/`password`/`token`/`key`/
+      `credential` case-insensitively without a matching `deploy.allow_sensitive_input_names`
+      entry; unknown-keys discipline unchanged; every command that does not deploy or destroy
+      never reads it. Trace `feat-001/AC-35` in `tests/config.test.ts`.
+      Files: `src/core/types.ts`, `src/core/config.ts`, `tests/config.test.ts`.
+- [ ] 16.2 The record carries recorded input values (name → value), absent-tolerant in both
+      directions: old records read cleanly, and a record without the field means "none recorded".
+      Updates replace the whole map. The 512-character/no-control-characters value rule is
+      enforced where a value is supplied (feat-002's refusal, task 12.1), and the registry
+      round-trips the field. Trace `feat-001/AC-36` in `tests/registry.test.ts` and
+      `tests/fake-store.ts`.
+      Files: `src/core/types.ts`, `src/core/registry.ts`, `tests/registry.test.ts`,
+      `tests/fake-store.ts`.
+- [ ] 16.3 The seeded settings file states, beside `deploy.inputs`, that declared values are
+      recorded in the registry in the clear and shown wherever the record is shown — the warning
+      written where the operator declares the name. Trace `feat-001/AC-35` in
+      `tests/install.test.ts`.
+      Files: `src/core/install.ts`, `tests/install.test.ts`.
+- [ ] 16.5 `skyhook redact <environment> <name>` removes one recorded value from the record,
+      touching nothing else — the manual-dispatch surface protect and unprotect already ride,
+      routed to no pull-request event (a guardrail, stated as such). Redaction removes, never
+      rewrites; it writes read–CAS–retry like every mutator, and changes content, never state —
+      a teardown's re-confirm must not read its version bump as a reactivation. Trace
+      `feat-001/AC-37` in
+      `tests/registry.test.ts` and the CLI test beside the protect verb's.
+      Files: `src/core/registry.ts`, `src/cli/main.ts`, `tests/registry.test.ts`,
+      `tests/cli-protect.test.ts` (or a sibling `cli-redact` test file).

@@ -47,12 +47,19 @@ answers cap headroom, freeable slot, and a branch's URL).
 - **D5 — Detail without JavaScript: same-page anchors.** Each row's identity links to a
   per-environment section further down the same page showing the full record (repository,
   identity, deployed commit, PR number derived from the `pr-<number>` identity convention when it
-  matches, state, protection, createdAt/updatedAt, URL). One route, one render, satisfies AC-4.
-  Null `url`/`deployedCommit` render as a literal "pending" marker (AC-6), never an empty href.
+  matches, state, protection, createdAt/updatedAt, URL, and — since `chg-001` — the recorded
+  deploy inputs when the record carries any: one line per input, sorted by name, plain wrapped
+  text, never truncated, never a link). One route, one render, satisfies AC-4.
+  Null `url`/`deployedCommit` render as a literal "pending" marker (AC-6), never an empty href;
+  absent recorded inputs render nothing — no later step fills them in (`chg-001`).
   **Record content is hostile until proven otherwise** (analyze S1): record bodies are writable
   by PR-triggered runs, so `renderDashboardPage` HTML-escapes every interpolated field, and only
   a URL whose scheme is `http:`/`https:` becomes an `<a href>` — anything else renders as inert
   escaped text. This is a completion condition of task 1.1, with hostile-content test cases.
+  Recorded deploy inputs are the field this rule exists for — attacker-suppliable by design — so
+  `chg-001` restates it for them explicitly: name and value both escaped, and a value is NEVER
+  linkified, `http:` scheme or not; the hostile-content test matrix extends to this field
+  (task 4.1's completion condition).
 
 - **D6 — Toolchain: nothing new.** TypeScript type-stripping under Node ≥22.18, `tsc --noEmit`,
   `node --test "tests/**/*.test.ts"`, existing `FakeStore` and fake-runner test patterns. No

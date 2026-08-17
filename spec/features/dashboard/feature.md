@@ -3,7 +3,7 @@ schema_version: 2
 id: "feat-005"               # IMMUTABLE
 slug: "dashboard"
 title: "Dashboard: see the environments skyhook manages"
-status: done                 # active | done | dropped — complete 2026-08-16: gate pass, all tasks verified, hs-1 observed
+status: active               # active | done | dropped — reopened 2026-08-17 by chg-001 (detail view shows recorded inputs); was done 2026-08-16
 owner: "andrew"
 depth: "prototype"           # express lane — prototype depth, set explicitly
 sprint: null
@@ -16,10 +16,10 @@ readiness:
   design:   n/a              # design stage is off for this workspace
   spec:     ready            # validate --as-ready clean; spec-review blocking findings fixed 2026-08-16
   plan:     ready            # plan + tasks written 2026-08-16
-  tasks:    ready            # every task verified 2026-08-16; hs-1 observed and resolved
+  tasks:    draft            # phase 4 (chg-001) written 2026-08-17, unbuilt; everything prior verified 2026-08-16
 gate:
-  analyze: pass              # 2026-08-16 re-run after C1–C3 + security fold-ins; see analyze.md
-  product_global_hash: "sha256:05854c7a7dc3"
+  analyze: pass              # 2026-08-17 re-gate after remediation: B2 display leg closed (escaping/non-linkification/sharp edge in the delta and D5); build waits on feat-001 16.4; see analyze.md
+  product_global_hash: "sha256:a8932ef5ee1c"
   constitution_hash: "sha256:a045ce0c2437"
 human_signoff:
   - id: hs-1

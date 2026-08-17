@@ -28,8 +28,10 @@ readiness:                   # per-artifact progress vector
                              #   verified 2026-08-17; earlier phases + live must-prove stand
 gate:
   analyze: pass              # not-run | pass | blocking | blocking-hard — re-gated 2026-08-17
-                             #   after the chg-001 fold (AC-11): pass, advisory wording notes only
-  product_global_hash: "sha256:05854c7a7dc3"
+                             #   after the chg-001 fold (AC-11): pass, advisory wording notes only.
+                             #   Re-stamped same day after the product-global privacy amendment
+                             #   (declared deploy inputs, additive, no interaction — see analyze.md)
+  product_global_hash: "sha256:a8932ef5ee1c"
   constitution_hash: "sha256:a045ce0c2437"
 converge:
   last_run: "2026-08-17"

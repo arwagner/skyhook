@@ -79,6 +79,11 @@ version field is the cheapest thing that keeps the door ajar. And a claim retrie
 times when the record it is about to classify disappears between the failed create and the read —
 a record deleted by a teardown racing the claim should produce a claim, not a spurious refusal.
 
+*(Amended by `chg-011`: the record gains a second follows-the-apply field — the recorded values of
+the repository's declared deploy inputs, name to value, updated exactly when the recorded commit
+is. Absent on records that predate the change and on repositories that declare none, and every
+reader treats absence as "none recorded".)*
+
 ### D2a — Identity is derived from the trigger; IAM enforces a prefix, not a key
 *(rewritten by `changes/chg-001` — the original specified a policy AWS cannot express.)*
 
@@ -303,6 +308,11 @@ without adding a mechanism — it reuses the seam D5 already needed.
 a derived name is a name someone else may already hold. The operator picks it once, in the bootstrap,
 and tells skyhook.
 
+*(Amended by `chg-011`: configuration gains `deploy.inputs` — an optional list of the Terraform
+variable names a deploy carries, read through this same default-branch-pinned seam so a pull
+request cannot widen what gets recorded. The settings file warns, beside the setting, that
+declared values are recorded in the registry in the clear.)*
+
 ### D6 — Adapter boundary
 ```
 src/core/        no import may reference S3, AWS, or Terraform
@@ -436,6 +446,9 @@ trace token in the test name, e.g. `test('feat-001/AC-5 concurrent claims: exact
 | AC-27 | `destruct()` | assert the state is pulled before the bucket is emptied, and that an unreadable state stops the run before anything is deleted |
 | AC-24 | `BOOTSTRAP_STATE_KEY` + Terraform source | assert the key sits outside every granted prefix and that no policy statement names it |
 | AC-16 | `registry.claim()` | fake store with an existing record in each state; assert both refuse and the two results differ |
+| AC-35 | `parseConfig()` in `src/core/config.ts` | good/bad names, the 16-name cap, duplicates, sensitive names with and without the per-name exception; assert refusals name the offender (`tests/config.test.ts`, chg-011) |
+| AC-36 | `registry` + fake store | round-trip the input map; assert wholesale replace, absence reads as "none recorded", old records unaffected (`tests/registry.test.ts`, chg-011) |
+| AC-37 | `registry` + CLI wiring | redact one value; assert the rest of the record is byte-identical and the verb rides the manual-dispatch surface only (chg-011) |
 
 **The must-prove is not in that table**, and that is the point. Every row above runs against a fake
 store that *implements* conditional-write semantics — which proves the logic is correct *given*

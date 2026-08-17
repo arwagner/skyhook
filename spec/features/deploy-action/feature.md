@@ -3,7 +3,7 @@ schema_version: 2
 id: "feat-002"               # IMMUTABLE
 slug: "deploy-action"
 title: "Deploy action: claim an environment and apply a consuming repo's Terraform from CI"
-status: done                 # active | done | dropped — complete 2026-08-16: gate pass and current, drift clean, every sign-off resolved, ov-1 discharged
+status: active               # active | done | dropped — reopened 2026-08-17 by chg-007 (declared inputs); was done 2026-08-16, ov-1 discharged
 owner: "andrew"
 depth: "prototype"           # prototype | mvp | ga
 sprint: null
@@ -15,10 +15,10 @@ readiness:
   design:   n/a              # design stage is off for this workspace
   spec:     ready
   plan:     ready
-  tasks:    ready            # every task done; hs-3 signed off 2026-08-16
+  tasks:    draft            # phase 12 (chg-007) written 2026-08-17, unbuilt; everything prior done, hs-3 signed off 2026-08-16
 gate:
-  analyze: pass              # 2026-08-16 seventh pass, re-gated after the third-exception amendment (chg-006); D3/D12 wording aligned same day
-  product_global_hash: "sha256:05854c7a7dc3"
+  analyze: pass              # 2026-08-17 re-gate after remediation: B1 closed, consistency fixes folded into the delta/plan/tasks; build waits on feat-001 16.4; see analyze.md
+  product_global_hash: "sha256:a8932ef5ee1c"
   constitution_hash: "sha256:a045ce0c2437"
 converge:
   last_run: "2026-08-16"
