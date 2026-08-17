@@ -3,7 +3,7 @@ schema_version: 2
 id: "feat-002"               # IMMUTABLE
 slug: "deploy-action"
 title: "Deploy action: claim an environment and apply a consuming repo's Terraform from CI"
-status: active               # active | done | dropped — reopened 2026-08-17 by chg-007 (declared inputs); was done 2026-08-16, ov-1 discharged
+status: done                 # active | done | dropped — chg-007 built, verified and folded 2026-08-17; gate pass, ov-1 discharged
 owner: "andrew"
 depth: "prototype"           # prototype | mvp | ga
 sprint: null
@@ -15,7 +15,7 @@ readiness:
   design:   n/a              # design stage is off for this workspace
   spec:     ready
   plan:     ready
-  tasks:    ready            # phase 12 (chg-007) built and verified 2026-08-17; chg-007 delta awaits fold
+  tasks:    ready            # phase 12 (chg-007) built and verified 2026-08-17; chg-007 delta folded 2026-08-17
 gate:
   analyze: pass              # 2026-08-17 re-gate after remediation: B1 closed, consistency fixes folded into the delta/plan/tasks; build waits on feat-001 16.4; see analyze.md
   product_global_hash: "sha256:a8932ef5ee1c"

@@ -29,6 +29,8 @@ The list view is unchanged: inputs are detail, not scanning material, and the li
   `tests/dashboard.test.ts`.
 
 ## Status
-- [ ] delta reviewed (analyze)
-- [ ] implemented & verified
-- [ ] folded into spec.md
+- [x] delta reviewed (analyze) — 2026-08-17, two rounds: blocking-hard on the security findings,
+      remediations folded into the delta the same day, re-gate pass
+- [x] implemented & verified — 2026-08-17, in the joint declared-inputs build, test-first;
+      every task checked off with its trace token
+- [x] folded into spec.md — 2026-08-17

@@ -3,7 +3,7 @@ schema_version: 2
 id: "feat-001"               # IMMUTABLE
 slug: "backing-store"
 title: "Backing store for the environment registry and Terraform state"
-status: active               # active | done | dropped — reopened 2026-08-17 by chg-011 (declared deploy inputs); was done 2026-08-16
+status: done                 # active | done | dropped — chg-011 built, verified and folded 2026-08-17; gate pass, sign-offs resolved
 owner: "andrew"
 depth: "prototype"           # prototype | mvp | ga
 sprint: null
@@ -15,7 +15,7 @@ readiness:
   design:   n/a              # design stage is off for this workspace
   spec:     ready
   plan:     ready
-  tasks:    ready            # phase 16 (chg-011) built and verified 2026-08-17; chg-011 delta awaits fold
+  tasks:    ready            # phase 16 (chg-011) built and verified 2026-08-17; chg-011 delta folded 2026-08-17
 gate:
   analyze: pass              # 2026-08-17 re-gate after remediation: B1/B2 closed (B2 residual is a stated MVP cliff); build order 16.4 first; see analyze.md
   product_global_hash: "sha256:a8932ef5ee1c"
