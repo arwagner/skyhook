@@ -51,6 +51,21 @@ environment is deployed as an isolated copy of the same definition, named by its
 repository reads that name to label and namespace its own resources. Skyhook does not require the
 repository to declare an input variable, and does not inject one.
 
+**Dynamic artifacts reach the definition without skyhook injecting anything either, and skyhook
+records what reached it** (`chg-007`). A deploy often carries values no branch can know in advance
+— a container image tag built minutes earlier, an artifact URI. They travel as Terraform's own
+`TF_VAR_<name>` environment variables, set by the calling workflow; skyhook injects no variable
+and passes no `-var`. Unlike the identity, which needs no declaration at all, these are inputs the
+repository's definition must declare a matching `variable` block for — that contract is between
+the repository and its own Terraform, and skyhook is not a party to it. What skyhook adds is
+memory: the repository declares the names in its settings (`deploy.inputs`, read from the default
+branch like every setting), and skyhook reads each declared value at deploy time and records it
+against the environment once the apply succeeds — because an artifact reference is part of *what
+is deployed*, and the registry is the single source of truth for that. A destroy replays the
+recorded values, which is teardown's side of the contract. An undeclared variable still reaches a
+deploy — the environment is the workflow's own — but is not recorded, so at destroy time it does
+not exist; a variable the definition needs at destroy must be declared.
+
 **The record precedes the resource, and the recorded commit follows it.** A record is written
 before any of the repository's infrastructure is applied. The commit recorded as deployed is
 updated only once the apply has succeeded, so an environment whose record names an older commit —
@@ -160,6 +175,20 @@ comment and owns no comment format.
   - Then the run fails before applying anything, naming what is missing and what the maintainer must
     do
 
+- **Scenario: a deploy carries declared inputs**
+  - Given a repository whose settings declare `deploy.inputs: [image_tag]`, and a workflow that
+    builds an image and sets `TF_VAR_image_tag` before invoking skyhook
+  - When a pull request deploys twice, each push building a new image
+  - Then each successful deploy records the value that push supplied, alongside the commit, and
+    the record always names the image the standing environment was actually built from
+
+- **Scenario: a declared input is missing**
+  - Given a repository whose settings declare an input, and a run whose environment does not set
+    the corresponding `TF_VAR_<name>`
+  - When the deploy runs
+  - Then it is refused before the claim, naming the missing variable — no record is written,
+    nothing is applied, and no default silently deploys in the value's place
+
 ## Acceptance criteria
 - [ ] AC-1: A pull request opened on an installed repository results in an environment whose
       infrastructure has been applied and a URL handed back by the run. An unauthenticated HTTP
@@ -252,6 +281,21 @@ comment and owns no comment format.
       operator must supply, each with where its value comes from, and is a valid settings file as
       written — the settings that cannot yet be known are present and inert rather than absent, so
       supplying one means replacing a labelled blank.
+- [ ] AC-22: A deploy on a repository whose settings declare inputs reads `TF_VAR_<name>` for
+      each declared name after the settings are read and before the cap is counted — so before
+      the claim, and a mis-wired workflow gets the more actionable refusal whatever the
+      environment count is. A declared input that is missing, empty, or in violation of the
+      store's value rule (512 characters, no control characters — feat-001/AC-36 owns the rule;
+      this feature restates none of it) is refused there, naming the variable: no record is
+      written and nothing is applied. Empty means the empty string exactly; a whitespace-only
+      value is a value, recorded as supplied. The refusal is distinguishable, in output and exit
+      status, from a failure of the repository's own apply. Declared inputs change nothing about
+      how values reach Terraform — skyhook passes no `-var`, and a repository that declares none
+      deploys exactly as before. (Added by `chg-007`.)
+- [ ] AC-23: The recorded input values change only when the recorded commit does: after a
+      successful apply, both are updated together to that deploy's values; a failed apply leaves
+      both unchanged. An environment's record therefore names the commit and the artifacts of the
+      last deploy that landed, or none if none has. (Added by `chg-007`.)
 
 ## Known sharp edges (prototype)
 - **Nothing tears these environments down.** Teardown on close and the scheduled sweep are separate

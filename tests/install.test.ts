@@ -593,3 +593,28 @@ test('feat-003/AC-12 re-running init over a pre-teardown installation updates th
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+test('feat-001/AC-35 the seeded settings file warns, beside the inputs slot, that values are recorded in the clear', () => {
+  const root = scratch();
+  try {
+    init({ repositoryRoot: root, ...OPTIONS });
+    const document = readFileSync(join(root, '.skyhook/config.yml'), 'utf8');
+
+    // Still inert: the new slots are commented, and a fresh file must keep parsing.
+    assert.ok(parseConfig(document).ok);
+
+    assert.match(document, /#  inputs:/, 'a slot for the declared deploy inputs');
+    // The warning lives where the operator declares a name, not only in the specification:
+    // recorded values land in the registry in the clear and appear on the dashboard, so a
+    // secret must never travel through a declared input.
+    assert.match(document, /in the clear/);
+    assert.match(document, /[Nn]ever a secret|no secret|NOT a secret/);
+    assert.match(
+      document,
+      /allow_sensitive_input_names/,
+      'the per-name exception is named where it would be used',
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});

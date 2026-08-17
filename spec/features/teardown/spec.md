@@ -151,6 +151,14 @@ only in what starts them.
   - Then the scaffolded workflow is updated to also run on pull request close and on a schedule,
     and the install reports the update — teardown wiring arrives the same way the file arrived
 
+- **Scenario: destroying an environment whose deploy carried declared inputs**
+  - Given an environment whose record carries recorded deploy inputs (an image tag its definition
+    requires as a variable), recorded by the deploy that built it
+  - When any teardown path destroys it — the close fast path, the sweep, or a manual teardown
+  - Then the definition runs with `TF_VAR_<name>` set to each recorded value, the destroy
+    succeeds without any variable prompt or missing-variable error, and the record and its
+    recorded values are removed together, as the record always is
+
 ## Acceptance criteria
 
 - [ ] AC-1: Closing a pull request with an `active` environment destroys that environment's
@@ -192,6 +200,18 @@ only in what starts them.
       infrastructure, deleting state, or removing the record, and reports the environment as
       reactivated and left standing; interleaving a teardown with a reopening deploy at every
       step boundary never ends with the deploy's environment destroyed or its record gone.
+- [ ] AC-15: Every destroy that runs the definition at the recorded commit sets `TF_VAR_<name>`
+      for each input value the record carries, before the definition runs — on the close fast
+      path, the sweep, and the manual teardown alike, because they share one teardown. The
+      recorded values are used even when the repository's declared list has since changed: the
+      record is the truth for what was deployed, exactly as it already is for the commit. A
+      record carrying no recorded inputs destroys with none set, which is the unchanged behavior
+      of every record written before recording existed. When such a record's definition
+      nonetheless requires a variable, the destroy fails loudly and is retried: on the sweep,
+      down AC-9's keep-going-then-fail path; on the close fast path, by leaving the `released`
+      record that AC-5 defines as a started teardown, which the next sweep pass picks up. Either
+      way the run's output surfaces Terraform's own failure text, which names the variable —
+      skyhook does not author that message and promises no shape for it. (Added by `chg-001`.)
 
 ## Known sharp edges (prototype)
 
@@ -228,6 +248,14 @@ only in what starts them.
   the sweep still leaves any other `active` record untouched, but a `released` record is a
   started teardown whatever kind of environment it names, and the sweep completes it — the
   destroy decision was a human's; the sweep only finishes it.*
+- **A pre-recording record that needs a variable fails until a human moves** (`chg-001`). An
+  environment deployed before recording existed (or whose value was redacted, feat-001/AC-37)
+  has nothing to replay. If its definition requires the variable, every destroy attempt fails
+  and is retried, visibly, forever — the same class as the "recorded commit may be gone" edge
+  beside this one, and the same remedy: a human redeploys so the values are recorded, supplies
+  the destroy by hand, or accepts the noise until the environment is dealt with. Nothing here
+  retries smarter, deliberately: inventing a value for a destroy is how the wrong thing gets
+  destroyed quietly.
 
 ## Open questions
 

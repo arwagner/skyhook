@@ -257,3 +257,74 @@ test('feat-006/AC-6 a push to a non-default ref is refused, naming the ref the r
   assert.equal(code, 1);
   assert.match(err.lines.join(' '), /refs\/heads\/main/);
 });
+
+// --- declared inputs at the CLI seam (chg-007) -----------------------------------
+
+const INPUTS_CONFIG = `storage:
+  bucket: skyhook-acme
+  region: us-east-1
+  account: "123456789012"
+
+deploy:
+  directory: infrastructure
+  inputs:
+    - image_tag
+`;
+
+const inputsConfigFetch: typeof globalThis.fetch = async (url) => {
+  const target = String(url);
+  if (target.includes('/contents/')) return new Response(INPUTS_CONFIG, { status: 200 });
+  if (target.includes('/repos/')) {
+    return new Response(JSON.stringify({ default_branch: 'main' }), { status: 200 });
+  }
+  throw new Error(`a declared-input refusal must not reach further than settings: ${target}`);
+};
+
+test('feat-002/AC-22 a missing declared input exits 1 — skyhook-side, not the consumer exit 3', async () => {
+  // The refusal happens before any credential is requested: the fetch above throws on
+  // anything but the settings read, and the runner counts what would have been STS calls.
+  let commandsRun = 0;
+  const countingRunner: CommandRunner = {
+    run: async (): Promise<CommandResult> => {
+      commandsRun += 1;
+      return { code: 0, stdout: '', stderr: '' };
+    },
+  };
+  const err = collect();
+  const code = await deploy({
+    env: env({
+      GITHUB_EVENT_PATH: join(import.meta.dirname, 'fixtures-pull-request.json'),
+      // TF_VAR_image_tag deliberately absent.
+    }),
+    repositoryRoot: '/tmp',
+    runner: countingRunner,
+    out: collect().sink,
+    err: err.sink,
+    fetch: inputsConfigFetch,
+  });
+
+  assert.equal(code, 1, 'a mis-wired workflow is a skyhook-side refusal');
+  assert.notEqual(code, EXIT_CONSUMER_APPLY_FAILED);
+  assert.match(err.lines.join(' '), /TF_VAR_image_tag/, 'names what the workflow must set');
+  assert.equal(commandsRun, 0, 'no command ran — nothing was applied');
+});
+
+test('feat-002/AC-22 the value rides the run environment: set, the refusal does not fire', async () => {
+  // With TF_VAR_image_tag present the run proceeds past the input check and fails later,
+  // at credentials — proving the CLI wires the environment through as the value source.
+  const err = collect();
+  const code = await deploy({
+    env: env({
+      GITHUB_EVENT_PATH: join(import.meta.dirname, 'fixtures-pull-request.json'),
+      TF_VAR_image_tag: 'abc123',
+    }),
+    repositoryRoot: '/tmp',
+    runner: silentRunner,
+    out: collect().sink,
+    err: err.sink,
+    fetch: inputsConfigFetch,
+  });
+
+  assert.equal(code, 1);
+  assert.doesNotMatch(err.lines.join(' '), /TF_VAR_image_tag/, 'the input refusal did not fire');
+});

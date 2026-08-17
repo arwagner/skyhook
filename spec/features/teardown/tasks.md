@@ -124,3 +124,23 @@ code they cover, per the house pattern.
         survives both paths (AC-4); reopened-after-teardown deploys fresh (AC-11); the cap
         slot frees (AC-13). Record observations — including scheduler lateness against the
         15-minute cadence — on manifest item `hs-3`.
+
+## Phase 7 — the destroy replays the recorded inputs (authorized by `chg-001`)
+
+> Built in the joint declared-inputs branch with feat-001 Phase 16, feat-002 Phase 12 and
+> feat-005 Phase 4. **Ordering:** feat-001 task 16.4 (the product-global amendment, od-3) lands
+> before any of this is built.
+
+- [x] 7.1 (2026-08-17) Every destroy path — close fast path, sweep, manual — sets `TF_VAR_<name>` for each
+      recorded input value before the definition runs in the scratch checkout, via the child
+      process's environment object, never a shell string; a record carrying none destroys with
+      none set; a required variable on such a record fails loudly and is retried (AC-9's sweep
+      path; AC-5's released-record mechanics on the fast path). Trace `feat-003/AC-15` in
+      `tests/teardown.test.ts`, `tests/sweep.test.ts`, `tests/terraform-destroy.test.ts`, and —
+      so the manual starter is verified rather than assumed shared — a regression in
+      `tests/cli-teardown.test.ts`, feat-006's own precedent for shared-machinery changes.
+- [x] 7.2 (2026-08-17; the re-confirm already keyed on state — the test pins it so it stays that way) A redaction landing mid-teardown (feat-001/AC-37) is not a reactivation: the teardown's
+      re-confirm keys on the record's state, so a redaction-only write — content changed, state
+      still `released` — neither aborts the destroy as "reactivated" nor is silently lost.
+      Trace `feat-003/AC-15` (and cite `feat-001/AC-37`) in `tests/teardown.test.ts` with a fake
+      store interleaving the redact between release and re-confirm.

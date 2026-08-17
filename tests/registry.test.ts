@@ -383,3 +383,150 @@ test('removeRecord deletes the record alone and never reaches the protection pre
   assert.equal(store.rawValue(registryKeyFor(REPO, 'pr-9')), undefined);
   assert.notEqual(store.rawValue(protectionKeyFor(REPO, 'pr-8')), undefined);
 });
+
+// --- declared deploy inputs on the record (chg-011) --------------------------
+
+test('feat-001/AC-36 recorded input values round-trip, and updates replace the whole map', async () => {
+  const store = new FakeStore();
+  const registry = makeRegistry(store);
+  const claimed = await registry.claim({ repository: REPO, identity: 'pr-9' });
+  assert.equal(claimed.ok, true);
+  if (!claimed.ok) return;
+  assert.equal(claimed.record.deployInputs, null, 'a claim precedes any landed deploy');
+
+  const first = await registry.update(REPO, 'pr-9', claimed.version, {
+    deployedCommit: 'abc123',
+    deployInputs: { image_tag: 'abc123', speech_image: 'ecr/speech:1' },
+  });
+  assert.equal(first.ok, true);
+  if (!first.ok) return;
+  assert.deepEqual(first.record.deployInputs, {
+    image_tag: 'abc123',
+    speech_image: 'ecr/speech:1',
+  });
+
+  // Wholesale replace: a name no longer declared does not linger from an earlier deploy.
+  const second = await registry.update(REPO, 'pr-9', first.version, {
+    deployedCommit: 'def456',
+    deployInputs: { image_tag: 'def456' },
+  });
+  assert.equal(second.ok, true);
+  if (!second.ok) return;
+  assert.deepEqual(second.record.deployInputs, { image_tag: 'def456' });
+
+  const read = await registry.read(REPO, 'pr-9');
+  assert.equal(read.ok, true);
+  if (!read.ok || read.record === null) return;
+  assert.deepEqual(read.record.deployInputs, { image_tag: 'def456' });
+});
+
+test('feat-001/AC-36 a record written before the field existed reads back with none recorded', async () => {
+  const store = new FakeStore();
+  // The literal stored shape of a pre-chg-011 record, seeded byte-for-byte rather than
+  // written through today's serializer, so this proves the reader and not the writer.
+  store.seed(
+    registryKeyFor(REPO, 'pr-old'),
+    JSON.stringify({
+      schemaVersion: 1,
+      repository: REPO,
+      identity: 'pr-old',
+      state: 'active',
+      deployedCommit: 'aaa111',
+      url: 'https://old.example',
+      createdAt: '2026-08-01T00:00:00.000Z',
+      updatedAt: '2026-08-01T00:00:00.000Z',
+    }),
+  );
+  const registry = makeRegistry(store);
+  const read = await registry.read(REPO, 'pr-old');
+  assert.equal(read.ok, true);
+  if (!read.ok || read.record === null) return;
+  assert.equal(read.record.deployInputs, null);
+  assert.equal(read.record.url, 'https://old.example', 'the rest of the record is untouched');
+});
+
+// --- redaction (chg-011, AC-37) ----------------------------------------------
+
+test('feat-001/AC-37 redacting one value removes it and touches nothing else', async () => {
+  const store = new FakeStore();
+  const registry = makeRegistry(store);
+  const claimed = await registry.claim({ repository: REPO, identity: 'pr-9' });
+  assert.equal(claimed.ok, true);
+  if (!claimed.ok) return;
+  const updated = await registry.update(REPO, 'pr-9', claimed.version, {
+    deployedCommit: 'abc123',
+    url: 'https://pr-9.example',
+    deployInputs: { image_tag: 'abc123', oops_conn: 'postgres://user:pw@host/db' },
+  });
+  assert.equal(updated.ok, true);
+  if (!updated.ok) return;
+
+  const redacted = await registry.redactInput(REPO, 'pr-9', 'oops_conn');
+  assert.equal(redacted.ok, true);
+
+  const read = await registry.read(REPO, 'pr-9');
+  assert.equal(read.ok, true);
+  if (!read.ok || read.record === null) return;
+  assert.deepEqual(read.record.deployInputs, { image_tag: 'abc123' });
+  assert.equal(read.record.state, 'active', 'redaction changes content, never state');
+  assert.equal(read.record.deployedCommit, 'abc123');
+  assert.equal(read.record.url, 'https://pr-9.example');
+  assert.ok(
+    !(store.rawValue(registryKeyFor(REPO, 'pr-9')) ?? '').includes('postgres://'),
+    'the redacted value is gone from the stored bytes, not merely hidden from readers',
+  );
+});
+
+test('feat-001/AC-37 redacting a name that is not recorded succeeds as a no-op', async () => {
+  const store = new FakeStore();
+  const registry = makeRegistry(store);
+  const claimed = await registry.claim({ repository: REPO, identity: 'pr-9' });
+  assert.equal(claimed.ok, true);
+  const outcome = await registry.redactInput(REPO, 'pr-9', 'never_recorded');
+  assert.equal(outcome.ok, true, 'already-absent is the state asked for');
+});
+
+test('feat-001/AC-37 redaction retries a lost race instead of failing or clobbering', async () => {
+  // A concurrent writer bumps the record between redaction's read and its swap. The
+  // redact must retry on the fresh version — never overwrite the concurrent write, and
+  // never give up on the first collision.
+  const store = new FakeStore();
+  const registry = makeRegistry(store);
+  const claimed = await registry.claim({ repository: REPO, identity: 'pr-9' });
+  assert.equal(claimed.ok, true);
+  if (!claimed.ok) return;
+  const updated = await registry.update(REPO, 'pr-9', claimed.version, {
+    deployInputs: { image_tag: 'abc123', oops: 'sensitive' },
+  });
+  assert.equal(updated.ok, true);
+  if (!updated.ok) return;
+
+  let interfered = false;
+  const key = registryKeyFor(REPO, 'pr-9');
+  // Delegates everything to the real fake, but the first swap loses: an interloper
+  // rewrites the record just before it, so the redact's expected version is stale.
+  const racingStore: typeof store = Object.assign(Object.create(null), {
+    createIfAbsent: store.createIfAbsent.bind(store),
+    read: store.read.bind(store),
+    list: store.list.bind(store),
+    delete: store.delete.bind(store),
+    rawValue: store.rawValue.bind(store),
+    allKeys: store.allKeys.bind(store),
+    seed: store.seed.bind(store),
+    compareAndSwap: async (...args: Parameters<FakeStore['compareAndSwap']>) => {
+      if (!interfered) {
+        interfered = true;
+        store.seed(key, store.rawValue(key) ?? '');
+      }
+      return store.compareAndSwap(...args);
+    },
+  });
+  const racingRegistry = new Registry(racingStore, { now: fixedClock() });
+
+  const outcome = await racingRegistry.redactInput(REPO, 'pr-9', 'oops');
+  assert.equal(outcome.ok, true, 'the lost race is retried, not surfaced');
+  const read = await registry.read(REPO, 'pr-9');
+  assert.equal(read.ok, true);
+  if (!read.ok || read.record === null) return;
+  assert.deepEqual(read.record.deployInputs, { image_tag: 'abc123' });
+});

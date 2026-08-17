@@ -16,6 +16,7 @@ function record(overrides: Partial<EnvironmentRecord> & { identity: string }): E
     state: 'active',
     deployedCommit: 'abc123def456',
     url: 'https://pr-482.example.test',
+    deployInputs: null,
     createdAt: '2026-08-14T00:00:00.000Z',
     updatedAt: '2026-08-15T12:30:00.000Z',
     ...overrides,
@@ -183,4 +184,43 @@ test('feat-005/AC-1 only http(s) URLs become links; other schemes render as iner
   const page = renderDashboardPage(model);
   assert.ok(!/href="javascript:/.test(page), 'a javascript: URL is never a href');
   assert.ok(page.includes('javascript:alert(1)'), 'the value is still visible, as text');
+});
+
+// --- the detail view shows the recorded inputs (chg-001) ----------------------
+
+test('feat-005/AC-4 recorded inputs render one line per input, sorted, escaped, never linkified', () => {
+  const rec = record({
+    identity: 'pr-482',
+    deployInputs: {
+      // Deliberately unsorted, URL-shaped, and hostile — the field this feature's
+      // hostile-content rule exists for. The 512-char value must survive untruncated.
+      speech_image: 'https://evil.example/looks-like-a-link',
+      image_tag: '<script>alert(1)</script>',
+      big_value: 'x'.repeat(512),
+    },
+  });
+  const page = renderDashboardPage(buildDashboardModel(REPO, [rec], [], CAP));
+
+  const detail = page.slice(page.indexOf('<section id="env-pr-482"'));
+  // Sorted by name: deterministic from the record alone, whatever JSON key order held.
+  const order = ['big_value', 'image_tag', 'speech_image'].map((n) => detail.indexOf(n));
+  assert.ok(order[0]! >= 0 && order[0]! < order[1]! && order[1]! < order[2]!, `sorted: ${order}`);
+  // Escaped, both halves.
+  assert.ok(!detail.includes('<script>'), 'the value is escaped');
+  assert.ok(detail.includes('&lt;script&gt;'), 'escaped, not dropped');
+  // Never a link, however much the value looks like one.
+  assert.ok(
+    !detail.includes('href="https://evil.example'),
+    'a recorded input value is never an anchor',
+  );
+  assert.ok(detail.includes('https://evil.example/looks-like-a-link'), 'shown as inert text');
+  // Full length, no truncation.
+  assert.ok(detail.includes('x'.repeat(512)));
+});
+
+test('feat-005/AC-4 a record without recorded inputs shows nothing for them — no pending placeholder', () => {
+  const rec = record({ identity: 'pr-9', deployInputs: null });
+  const page = renderDashboardPage(buildDashboardModel(REPO, [rec], [], CAP));
+  const detail = page.slice(page.indexOf('<section id="env-pr-9"'));
+  assert.ok(!/[Ii]nput/.test(detail), 'no inputs row, and no pending marker in its place');
 });

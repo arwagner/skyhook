@@ -15,9 +15,24 @@
 
 import { identityFor } from './identity.ts';
 import { loadConfig, type ConfigSource } from './config.ts';
+import { deployInputValueProblem } from './registry.ts';
 import type { AccessBroker, EnvironmentDeployer, TriggerSource } from './ports.ts';
 import type { Registry } from './registry.ts';
 import type { SkyhookConfig } from './types.ts';
+
+/**
+ * Where a declared deploy input's value comes from at run time (chg-007, AC-22).
+ *
+ * A port, because the transport is the tool's: values ride the calling workflow's
+ * environment under the tool's own variable convention, and nothing in `src/core/` may
+ * name that convention (constitution, provider-agnostic core). `address` renders the
+ * name in the tool's vocabulary — the exact thing the workflow must set — so a refusal
+ * can say it without core knowing it.
+ */
+export interface DeclaredInputSource {
+  read(name: string): string | undefined;
+  address(name: string): string;
+}
 
 export interface DeployPorts {
   readonly trigger: TriggerSource;
@@ -25,6 +40,12 @@ export interface DeployPorts {
   readonly broker: AccessBroker;
   /** Milliseconds from some fixed point. Injected so timing is testable. */
   readonly now: () => number;
+  /**
+   * Absent means no values are readable — every declared input is then refused as
+   * missing, loudly. Fail-closed: a wiring that forgets this cannot silently deploy
+   * a definition's defaults in the values' place.
+   */
+  readonly inputSource?: DeclaredInputSource;
 }
 
 export type DeployResult =
@@ -109,6 +130,14 @@ export async function deployEnvironment(ports: DeployPorts): Promise<DeployResul
   /* c8 ignore next */
   if (deploySettings === null) return { kind: 'failed', message: 'configuration: deploy is required' };
 
+  // Declared inputs are read here — after the settings that declare them, before any
+  // credential is requested and before the claim (AC-22). A missing one means the
+  // workflow is mis-wired, and the two other places that could surface are both worse:
+  // the tool prompting is dead in automation, and a definition-side default deploying in
+  // the value's place is the silent catastrophe the explicit list exists to prevent.
+  const inputs = readDeclaredInputs(deploySettings.inputs, ports.inputSource);
+  if (!inputs.ok) return { kind: 'failed', message: inputs.problem };
+
   const access = await ports.broker.open({
     config: loaded.config,
     repository,
@@ -164,9 +193,12 @@ export async function deployEnvironment(ports: DeployPorts): Promise<DeployResul
         'and the registry does not describe it — re-run before anything else.',
     };
   }
+  // The values move exactly when the commit does, as a wholesale replace (AC-23): the
+  // record always names the commit and the artifacts of the last deploy that landed.
   const updated = await registry.update(repository, identity, recorded.version, {
     deployedCommit: headCommit,
     url: applied.url,
+    deployInputs: Object.keys(inputs.values).length > 0 ? inputs.values : null,
   });
   if (!updated.ok) {
     return {
@@ -207,6 +239,48 @@ function missingDeploySettings(config: SkyhookConfig): string | null {
     'Add it on the default branch — settings are read from there, never from a pull ' +
     "request's own branch."
   );
+}
+
+type DeclaredInputsResult =
+  | { readonly ok: true; readonly values: Readonly<Record<string, string>> }
+  | { readonly ok: false; readonly problem: string };
+
+/**
+ * Every declared input, read and held to the record's value rule, or one message naming
+ * every offender at once — a maintainer wiring this up for the first time would
+ * otherwise fix one, re-run, and be told about the next (the `missingDeploySettings`
+ * rationale). A repository that declares none deploys exactly as before (AC-22).
+ */
+function readDeclaredInputs(
+  names: readonly string[],
+  source: DeployPorts['inputSource'],
+): DeclaredInputsResult {
+  const problems: string[] = [];
+  const values: Record<string, string> = {};
+  for (const name of names) {
+    const address = source?.address(name) ?? name;
+    const value = source?.read(name);
+    if (value === undefined) {
+      problems.push(`${address} is not set`);
+      continue;
+    }
+    const problem = deployInputValueProblem(value);
+    if (problem !== null) {
+      problems.push(`${address} ${problem}`);
+      continue;
+    }
+    values[name] = value;
+  }
+  if (problems.length > 0) {
+    return {
+      ok: false,
+      problem:
+        `declared deploy inputs are unusable: ${problems.join('; ')}. ` +
+        'Set each before invoking skyhook — no record was written and nothing was applied, ' +
+        "so no definition default deployed in a value's place.",
+    };
+  }
+  return { ok: true, values };
 }
 
 type ClaimResult = { readonly ok: true } | { readonly ok: false; readonly problem: string };

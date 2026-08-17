@@ -138,6 +138,23 @@ storage:
 #  # Skyhook looks for a role named <prefix>-deploy. Declare it yourself — start from
 #  # .skyhook/deploy-role.example.tf. Optional; defaults to "${DEFAULT_ROLE_PREFIX}".
 #  role_prefix: ${DEFAULT_ROLE_PREFIX}
+#  # OPTIONAL: the deploy inputs your Terraform needs per deploy — an image tag, an artifact
+#  # URI. Your workflow sets TF_VAR_<name> for each before invoking skyhook; skyhook refuses a
+#  # deploy that is missing one, records each value once the apply lands, and replays them when
+#  # it later destroys the environment — a destroy runs in a fresh workflow run where your
+#  # TF_VAR_* no longer exist, so only what is recorded here survives to teardown.
+#  #
+#  # READ THIS BEFORE DECLARING A NAME: every recorded value is stored in the registry
+#  # in the clear and shown wherever the record is shown, including the dashboard, to
+#  # anyone whose credentials can read it. NEVER a secret — an artifact REFERENCE, not a
+#  # credential. A name that looks secret-bearing (secret/password/token/key/credential)
+#  # is refused unless you list that exact name under allow_sensitive_input_names, which
+#  # is your reviewable, per-name statement that it carries no secret. Recorded a secret
+#  # anyway? \`skyhook redact <environment> <name>\` removes that one value.
+#  inputs:
+#    - image_tag
+#  #allow_sensitive_input_names:
+#  #  - registry_key_alias
 
 environment_cap:
   # How many environments this repository may hold at once. Set enabled to false to lift the

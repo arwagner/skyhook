@@ -50,3 +50,17 @@ Glyphs: `[x]` done · `[ ]` not started · `[~]` in progress · `[-]` n/a · `[H
   **Observed (andrew, 2026-08-16):** run from the deadweight repo — "1 of 5 environments used";
   the single environment pr-4 correctly in use (neither reclaimable nor protected); its PR URL
   present as a working link. Full observation recorded on hs-1 in `feature.md`.
+
+## Phase 4 — the detail view shows the recorded inputs (authorized by `chg-001`)
+
+> Built in the joint declared-inputs branch with feat-001 Phase 16, feat-002 Phase 12 and
+> feat-003 Phase 7. **Ordering:** feat-001 task 16.4 (the product-global amendment, od-3) lands
+> before any of this is built.
+
+- [x] 4.1 (2026-08-17) The detail view renders the record's deploy inputs when it carries any — one line per
+      input, sorted by name, name and value both HTML-escaped per D5's hostile-content rule,
+      never linkified whatever the value looks like, plain wrapped text with no truncation — and
+      renders nothing for them (no pending placeholder) when it does not; the list view is
+      unchanged. Completion condition: D5's hostile-content test matrix extended to this field
+      (script tags, URL-shaped values, 512-char values). Trace `feat-005/AC-4` in
+      `tests/dashboard.test.ts`.

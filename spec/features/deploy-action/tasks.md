@@ -868,3 +868,19 @@ let it drift unnoticed.
       non-guarantee. The assertions below it are right; only the comment is stale.
 - [x] 9.3 Fold `chg-003` into `spec.md` — `AC-19` modified in place. Nothing is added or removed, so
       no id moves.
+
+## Phase 12 — declared inputs: read, refuse, record (authorized by `chg-007`)
+
+> Built in the joint declared-inputs branch with feat-001 Phase 16 (the contract), feat-003
+> Phase 7 (the replay) and feat-005 Phase 4 (the display). **Ordering:** feat-001 task 16.4 (the
+> product-global amendment, od-3) lands before any of this is built.
+
+- [x] 12.1 (2026-08-17; the TF_VAR_ prefix lives in src/adapters/terraform/inputs.ts behind the DeclaredInputSource port, so core stays provider-agnostic) A deploy reads `TF_VAR_<name>` for each declared name after config, before the cap
+      count and the claim; a missing, empty (the empty string exactly), or value-rule-violating
+      input is refused there, naming the variable — no record written, nothing applied. Trace
+      `feat-002/AC-22` in `tests/deploy.test.ts`, and in `tests/deploy-command.test.ts` assert
+      the refusal maps to exit 1, distinct from the consumer-apply exit 3.
+- [x] 12.2 (2026-08-17) Recorded values follow the apply exactly as the commit does: updated together on
+      success, both untouched on a failed apply, and a repository declaring none deploys exactly
+      as before. Trace `feat-002/AC-23` in `tests/deploy.test.ts` and
+      `tests/deploy-command.test.ts`.

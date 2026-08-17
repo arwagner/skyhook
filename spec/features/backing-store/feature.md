@@ -3,7 +3,7 @@ schema_version: 2
 id: "feat-001"               # IMMUTABLE
 slug: "backing-store"
 title: "Backing store for the environment registry and Terraform state"
-status: done                 # active | done | dropped — complete 2026-08-16: gate pass, drift clean, every sign-off resolved
+status: done                 # active | done | dropped — chg-011 built, verified and folded 2026-08-17; gate pass, sign-offs resolved
 owner: "andrew"
 depth: "prototype"           # prototype | mvp | ga
 sprint: null
@@ -15,10 +15,10 @@ readiness:
   design:   n/a              # design stage is off for this workspace
   spec:     ready
   plan:     ready
-  tasks:    ready            # gap-007 closed by converge run 8; every task built, verified and folded
+  tasks:    ready            # phase 16 (chg-011) built and verified 2026-08-17; chg-011 delta folded 2026-08-17
 gate:
-  analyze: pass              # 2026-08-16 re-gated after the third-exception amendment (chg-010); stale plan/tasks wording fixed same day
-  product_global_hash: "sha256:05854c7a7dc3"
+  analyze: pass              # 2026-08-17 re-gate after remediation: B1/B2 closed (B2 residual is a stated MVP cliff); build order 16.4 first; see analyze.md
+  product_global_hash: "sha256:a8932ef5ee1c"
   constitution_hash: "sha256:a045ce0c2437"
 human_signoff:
   - id: hs-1
@@ -95,6 +95,21 @@ open_decisions:
       — so the constitution now draws the boundary where a static policy can draw it and states the
       pull-request-to-pull-request gap, its cause, and its fix in its own words. Widening a PR-branch
       role beyond its own ephemeral namespace remains a violation. Plan Deviations is now empty.
+    owner: andrew
+    resolved: true
+  - id: od-3
+    description: >-
+      chg-011 records declared deploy-input values in the registry, and product-global.md's privacy
+      requirement enumerates what the registry stores ("only deployment metadata — repository,
+      commit, pull request number, environment identity, state, timestamps, and environment
+      URLs"). The enumeration must gain "declared deploy input values" or the two texts disagree
+      the moment the delta folds. A cross-cutting input is amended only through its own main-branch
+      commit, never inside a feature change (the od-3 precedent on feat-002), and editing it
+      restages every feature's pre-build check. UPGRADED by the 2026-08-17 gate (security B1) from
+      fold-blocking to BUILD-blocking for every declared-inputs phase. Task 16.4 carried it.
+      RESOLVED 2026-08-17: landed as its own commit on main (783fcc8), authorized by andrew in
+      the declared-inputs session. Every re-gate that day was stamped against the amended hash
+      (sha256:a8932ef5ee1c), so no gate went stale.
     owner: andrew
     resolved: true
 converge:

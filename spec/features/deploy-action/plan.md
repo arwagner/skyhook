@@ -484,6 +484,38 @@ refusal would. AC-11's "what the maintainer must do" therefore covers the merge 
 — the missing-role message names both, because at that point skyhook cannot tell which of the two
 is missing and guessing wrong sends the maintainer to the wrong file.
 
+### D13 — Declared inputs ride the environment, and the refusal sits before the claim (authorized by `chg-007`)
+
+Dynamic artifacts (an image tag, an artifact URI) reach Terraform as `TF_VAR_<name>` environment
+variables set by the calling workflow — the transport Terraform already owns — and skyhook still
+passes no `-var`, so D10's rule ("an output skyhook reads, never a variable skyhook injects")
+keeps its mirror image on the input side. What skyhook adds is memory, not plumbing: it reads the
+values whose names the configuration declares (`deploy.inputs`, feat-001 `chg-011`) and records
+them with the commit after a successful apply.
+
+*Why the refusal is before the claim:* a declared input that is missing at deploy time means the
+workflow is mis-wired, and the two other places the failure could surface are both worse.
+Terraform prompting is dead in automation (`TF_INPUT=0`), and a definition-side default is the
+silent catastrophe — an image variable falling back to `:latest` deploys the wrong code with a
+green run. Refusing before the claim names the variable while nothing exists yet: no record, no
+apply, nothing for the sweep to clean.
+
+*Why undeclared variables still pass through:* the child environment is the workflow's own, and a
+pull request controls its workflow anyway — stripping would close nothing and surprise everyone.
+Declaring buys exactly one thing: the value is recorded, and therefore exists when the destroy
+runs (feat-003 `chg-001`). The spec says this out loud so "it worked on deploy" is never read as
+"it will work on teardown".
+
+Three mechanics, pinned here after the pre-build check so tests do not codify accidents. **Where
+the read sits in D7's pipeline:** immediately after the settings are read and before the cap is
+counted — a repository both at the cap and missing an input hears about the input, the mistake it
+can actually fix in its workflow. **`TF_INPUT=0` is already the runner's setting** (the adapter's
+child environment sets it, D6), so the "Terraform prompting is dead" premise above is a fact of
+the existing code, not an assumption. **Timing:** the read and refusal land in D7a's
+`preparationMs` bucket by construction — subtraction, not summing, is what D7a chose precisely so
+new skyhook-side work counts against skyhook without a new stopwatch; AC-14's budget is
+unchanged.
+
 ## Verification approach
 
 Tests live in `tests/**/*.test.ts` (already declared in `spec/.spec-flow.md`; no change needed).
@@ -512,6 +544,8 @@ Each test names its criterion's trace token, e.g.
 | AC-18 | `runDeploy()` | injected failures of each kind; assert exit 3 with the repository named for an apply failure and exit 1 otherwise, with distinct wording |
 | AC-20 | `planInstall()` in `src/core/install.ts` + `init()` | on a temp tree: seed a config, hand-edit it AND a file skyhook owns, run `init` again, assert the config is byte-identical and reported left alone while the owned file is restored in the same run. The two halves are asserted together on purpose — "nothing changed" would also pass if `init` had stopped writing anything at all (`chg-002`) |
 | AC-21 | `configDocument()` in `src/cli/init.ts` | feed the seeded document straight to `parseConfig()` and assert it parses, so the commented placeholders are inert rather than broken; assert each operator-supplied setting is named in it with where its value comes from |
+| AC-22 | `deployEnvironment()` in `src/core/deploy.ts` + CLI wiring | fake env with a declared input missing / empty / rule-violating; assert the refusal lands after config, before the cap count and the claim — no record, no deploy-role assumption — and names the variable. In `tests/deploy-command.test.ts`, assert the refusal maps to exit 1, distinct from the consumer-apply exit 3 (D8), the AC-11/AC-18 pattern (`chg-007`) |
+| AC-23 | `deployEnvironment()` | successful apply: recorded values and commit updated together, wholesale; failing apply: both untouched, per AC-3's existing seam (`chg-007`) |
 
 **What the tests cannot prove**, in the same spirit as feat-001's note. Every row above that uses an
 injected runner proves what skyhook *asks* Terraform and STS to do, never whether they accept it —

@@ -181,3 +181,77 @@ deploy:
   assert.equal(loaded.ok && loaded.config.deploy?.directory, 'infra');
   assert.equal(loaded.ok && loaded.config.deploy?.rolePrefix, 'acme');
 });
+
+// --- declared deploy inputs (chg-011) ---------------------------------------
+
+const DEPLOY = ['deploy:', '  directory: infra'].join('\n');
+
+test('feat-001/AC-35 deploy.inputs parses as a list of names', () => {
+  const outcome = parseConfig(
+    `${STORAGE}\n${DEPLOY}\n  inputs:\n    - image_tag\n    - speech_image\n`,
+  );
+  assert.equal(outcome.ok, true);
+  if (!outcome.ok) return;
+  assert.deepEqual(outcome.config.deploy?.inputs, ['image_tag', 'speech_image']);
+});
+
+test('feat-001/AC-35 an absent inputs list means none, and older deploy blocks still parse', () => {
+  const outcome = parseConfig(`${STORAGE}\n${DEPLOY}\n`);
+  assert.equal(outcome.ok, true);
+  if (!outcome.ok) return;
+  assert.deepEqual(outcome.config.deploy?.inputs, []);
+});
+
+test('feat-001/AC-35 a name outside the identifier shape is refused by name', () => {
+  const outcome = parseConfig(`${STORAGE}\n${DEPLOY}\n  inputs:\n    - 9lives\n`);
+  assert.equal(outcome.ok, false);
+  if (outcome.ok) return;
+  assert.ok(
+    outcome.problems.some((p) => p.includes('9lives')),
+    `the refusal names the offender: ${outcome.problems.join('; ')}`,
+  );
+});
+
+test('feat-001/AC-35 a duplicated name is refused by name', () => {
+  const outcome = parseConfig(
+    `${STORAGE}\n${DEPLOY}\n  inputs:\n    - image_tag\n    - image_tag\n`,
+  );
+  assert.equal(outcome.ok, false);
+  if (outcome.ok) return;
+  assert.ok(outcome.problems.some((p) => p.includes('image_tag')));
+});
+
+test('feat-001/AC-35 more than 16 names are refused', () => {
+  const names = Array.from({ length: 17 }, (_, i) => `    - input_${i}`).join('\n');
+  const outcome = parseConfig(`${STORAGE}\n${DEPLOY}\n  inputs:\n${names}\n`);
+  assert.equal(outcome.ok, false);
+  if (outcome.ok) return;
+  assert.ok(outcome.problems.some((p) => p.includes('16')));
+});
+
+test('feat-001/AC-35 a sensitive name is refused without a per-name exception', () => {
+  const outcome = parseConfig(`${STORAGE}\n${DEPLOY}\n  inputs:\n    - api_token\n`);
+  assert.equal(outcome.ok, false);
+  if (outcome.ok) return;
+  assert.ok(outcome.problems.some((p) => p.includes('api_token')));
+});
+
+test('feat-001/AC-35 the per-name exception admits exactly the named input', () => {
+  const outcome = parseConfig(
+    `${STORAGE}\n${DEPLOY}\n  inputs:\n    - api_token\n` +
+      `  allow_sensitive_input_names:\n    - api_token\n`,
+  );
+  assert.equal(outcome.ok, true);
+  if (!outcome.ok) return;
+  assert.deepEqual(outcome.config.deploy?.inputs, ['api_token']);
+});
+
+test('feat-001/AC-35 an exception naming nothing declared is refused as a likely typo', () => {
+  const outcome = parseConfig(
+    `${STORAGE}\n${DEPLOY}\n  inputs:\n    - image_tag\n` +
+      `  allow_sensitive_input_names:\n    - api_token\n`,
+  );
+  assert.equal(outcome.ok, false);
+  if (outcome.ok) return;
+  assert.ok(outcome.problems.some((p) => p.includes('api_token')));
+});

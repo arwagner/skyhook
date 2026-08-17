@@ -613,3 +613,117 @@ environment_cap:
   assert.equal(refusedEphemeral.kind === 'failed' && refusedEphemeral.message.includes('cap 2'), true);
   assert.equal(ephemeral.deployer.called, false);
 });
+
+// --- declared inputs: read, refuse, record (chg-007) --------------------------
+
+const CONFIG_WITH_INPUTS = `${CONFIG}  inputs:
+    - image_tag
+    - speech_image
+`;
+
+function inputSource(values: Record<string, string>): NonNullable<DeployPorts['inputSource']> {
+  return {
+    read: (name) => values[name],
+    address: (name) => `TF_VAR_${name}`,
+  };
+}
+
+test('feat-002/AC-22 a missing declared input is refused before the claim, naming the variable', async () => {
+  let deployed = false;
+  const store = new FakeStore();
+  const deployer = new FakeDeployer({ onDeploy: () => { deployed = true; } });
+  const h = harness({ store, deployer, config: CONFIG_WITH_INPUTS });
+  const ports: DeployPorts = { ...h.ports, inputSource: inputSource({ image_tag: 'abc123' }) };
+
+  const result = await deployEnvironment(ports);
+
+  assert.equal(result.kind, 'failed');
+  if (result.kind !== 'failed') return;
+  // Names the variable in the tool's own vocabulary — what the workflow must actually set.
+  assert.match(result.message, /TF_VAR_speech_image/);
+  // No default silently deploys in the value's place: nothing recorded, nothing applied.
+  assert.deepEqual(store.allKeys(), [], 'no record was written');
+  assert.equal(deployed, false, 'nothing was applied');
+});
+
+test('feat-002/AC-22 an empty value is refused; whitespace-only is a value, recorded as supplied', async () => {
+  const empty = harness({ config: CONFIG_WITH_INPUTS });
+  const refused = await deployEnvironment({
+    ...empty.ports,
+    inputSource: inputSource({ image_tag: '', speech_image: 'x' }),
+  });
+  assert.equal(refused.kind, 'failed');
+  if (refused.kind === 'failed') assert.match(refused.message, /TF_VAR_image_tag/);
+
+  const spaced = harness({ config: CONFIG_WITH_INPUTS });
+  const accepted = await deployEnvironment({
+    ...spaced.ports,
+    inputSource: inputSource({ image_tag: ' ', speech_image: 'x' }),
+  });
+  assert.equal(accepted.kind, 'deployed');
+  const read = await spaced.registry.read(REPO, 'pr-482');
+  assert.ok(read.ok && read.record !== null);
+  if (!read.ok || read.record === null) return;
+  assert.deepEqual(read.record.deployInputs, { image_tag: ' ', speech_image: 'x' });
+});
+
+test('feat-002/AC-22 a value over the store rule is refused where it is supplied', async () => {
+  for (const bad of ['x'.repeat(513), 'line\nbreak', 'spoof‮txt.exe']) {
+    const h = harness({ config: CONFIG_WITH_INPUTS });
+    const result = await deployEnvironment({
+      ...h.ports,
+      inputSource: inputSource({ image_tag: bad, speech_image: 'ok' }),
+    });
+    assert.equal(result.kind, 'failed', `refused: ${JSON.stringify(bad.slice(0, 20))}`);
+    if (result.kind === 'failed') assert.match(result.message, /TF_VAR_image_tag/);
+  }
+});
+
+test('feat-002/AC-23 recorded values follow the apply exactly as the commit does', async () => {
+  // First deploy lands: values and commit recorded together.
+  const store = new FakeStore();
+  const first = harness({ store, config: CONFIG_WITH_INPUTS });
+  const deployedResult = await deployEnvironment({
+    ...first.ports,
+    inputSource: inputSource({ image_tag: 'abc123', speech_image: 'ecr/speech:1' }),
+  });
+  assert.equal(deployedResult.kind, 'deployed');
+  const afterFirst = await first.registry.read(REPO, 'pr-482');
+  assert.ok(afterFirst.ok && afterFirst.record !== null);
+  if (!afterFirst.ok || afterFirst.record === null) return;
+  assert.equal(afterFirst.record.deployedCommit, HEAD);
+  assert.deepEqual(afterFirst.record.deployInputs, {
+    image_tag: 'abc123',
+    speech_image: 'ecr/speech:1',
+  });
+
+  // Second push fails to apply: BOTH stay what the landed deploy recorded.
+  const failing = new FakeDeployer({
+    outcome: {
+      ok: false,
+      reason: 'consumer-apply-failed',
+      problem: 'terraform apply exited 1',
+      timing: { preparationMs: 0, initMs: 0, applyMs: 0 },
+    },
+  });
+  const second = harness({
+    store,
+    deployer: failing,
+    config: CONFIG_WITH_INPUTS,
+    ctx: context({ headCommit: 'ffff9999' }),
+  });
+  const failedResult = await deployEnvironment({
+    ...second.ports,
+    inputSource: inputSource({ image_tag: 'ffff9999', speech_image: 'ecr/speech:2' }),
+  });
+  assert.equal(failedResult.kind, 'consumer-failed');
+  const afterFailure = await second.registry.read(REPO, 'pr-482');
+  assert.ok(afterFailure.ok && afterFailure.record !== null);
+  if (!afterFailure.ok || afterFailure.record === null) return;
+  assert.equal(afterFailure.record.deployedCommit, HEAD, 'the commit is untouched');
+  assert.deepEqual(
+    afterFailure.record.deployInputs,
+    { image_tag: 'abc123', speech_image: 'ecr/speech:1' },
+    'the values are untouched with it',
+  );
+});

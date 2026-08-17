@@ -18,6 +18,7 @@ import { destruct } from './destruct.ts';
 import { deploy } from './deploy.ts';
 import { teardown } from './teardown.ts';
 import { protect } from './protect.ts';
+import { redact } from './redact.ts';
 import { sweep } from './sweep.ts';
 import { dashboard } from './dashboard.ts';
 import {
@@ -55,6 +56,7 @@ Usage:
   skyhook teardown  [--environment <name>]
   skyhook protect
   skyhook unprotect
+  skyhook redact
   skyhook sweep
   skyhook dashboard [options]
   skyhook destruct  [options]
@@ -185,6 +187,7 @@ export async function runCli(
   if (command === 'teardown') return runTeardown(rest, io, deps);
   if (command === 'protect') return runProtect(true, rest, io, deps);
   if (command === 'unprotect') return runProtect(false, rest, io, deps);
+  if (command === 'redact') return runRedact(rest, io, deps);
   if (command === 'sweep') return runSweep(rest, io, deps);
   if (command === 'dashboard') return runDashboard(rest, io, deps);
 
@@ -332,6 +335,17 @@ async function runProtect(mark: boolean, argv: readonly string[], io: CliIo, dep
     return EXIT_USAGE;
   }
   return protect(mark, { env: process.env, runner: deps.runner, out: io.out, err: io.err });
+}
+
+async function runRedact(argv: readonly string[], io: CliIo, deps: CliDeps): Promise<number> {
+  if (argv.length > 0) {
+    io.err(
+      'skyhook redact: takes no arguments — the environment comes from SKYHOOK_ENVIRONMENT ' +
+        'and the input name from SKYHOOK_INPUT_NAME',
+    );
+    return EXIT_USAGE;
+  }
+  return redact({ env: process.env, runner: deps.runner, out: io.out, err: io.err });
 }
 
 async function runSweep(argv: readonly string[], io: CliIo, deps: CliDeps): Promise<number> {

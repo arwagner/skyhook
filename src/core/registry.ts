@@ -125,7 +125,24 @@ function deserialize(json: string): EnvironmentRecord | null {
   // hide an environment that still needs tearing down.
   const rawUrl = candidate['url'];
   const url = typeof rawUrl === 'string' && rawUrl !== '' ? rawUrl : null;
-  return { repository, identity, state, deployedCommit, url, createdAt, updatedAt };
+  const deployInputs = readDeployInputs(candidate['deployInputs']);
+  return { repository, identity, state, deployedCommit, url, deployInputs, createdAt, updatedAt };
+}
+
+/**
+ * Absent means none recorded, not invalid (AC-36) — every record written before chg-011
+ * lacks the field. A malformed field is discarded the way a malformed `url` is: an
+ * unusable map is the same as no map, and refusing the whole record would hide an
+ * environment that still needs tearing down. Non-string entries are dropped
+ * individually, never coerced.
+ */
+function readDeployInputs(raw: unknown): Readonly<Record<string, string>> | null {
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return null;
+  const values: Record<string, string> = {};
+  for (const [name, value] of Object.entries(raw)) {
+    if (typeof value === 'string') values[name] = value;
+  }
+  return Object.keys(values).length > 0 ? values : null;
 }
 
 // --- outcomes ---------------------------------------------------------------
@@ -195,10 +212,38 @@ export interface RecordChanges {
   readonly state?: EnvironmentState;
   readonly deployedCommit?: string | null;
   readonly url?: string | null;
+  /** Wholesale replace, never a merge: the map is that deploy's values (AC-36). */
+  readonly deployInputs?: Readonly<Record<string, string>> | null;
 }
 
 /** How many times a claim retries when the record vanishes between create and read. */
 const CLAIM_ATTEMPTS = 3;
+
+/** The most characters one recorded deploy-input value may hold (AC-36). */
+export const INPUT_VALUE_MAX_LENGTH = 512;
+
+/**
+ * ASCII control characters (newlines included), and Unicode direction-control characters —
+ * HTML-escaping does not neutralize a visually reordered rendering, so the spoof is
+ * refused at the door instead (AC-36).
+ */
+// eslint-disable-next-line no-control-regex
+const FORBIDDEN_VALUE_CHARACTERS = /[\u0000-\u001f\u007f\u202a-\u202e\u2066-\u2069]/;
+
+/**
+ * The record's value rule, enforced where a value is supplied rather than where it is
+ * stored, so the refusal can name the variable (AC-36). Returns what is wrong, or null.
+ */
+export function deployInputValueProblem(value: string): string | null {
+  if (value === '') return 'is empty';
+  if (value.length > INPUT_VALUE_MAX_LENGTH) {
+    return `is ${value.length} characters — recorded values are capped at ${INPUT_VALUE_MAX_LENGTH}`;
+  }
+  if (FORBIDDEN_VALUE_CHARACTERS.test(value)) {
+    return 'contains control or direction-control characters, which recorded values refuse';
+  }
+  return null;
+}
 
 export class Registry {
   readonly #store: Store;
@@ -226,8 +271,10 @@ export class Registry {
         identity,
         state: 'active',
         deployedCommit: request.deployedCommit ?? null,
-        // A claim precedes the infrastructure, so there is no address yet by construction.
+        // A claim precedes the infrastructure, so there is no address yet by construction —
+        // and no recorded inputs, since those follow a landed apply the same way the commit does.
         url: null,
+        deployInputs: null,
         createdAt: timestamp,
         updatedAt: timestamp,
       };
@@ -280,6 +327,7 @@ export class Registry {
       ...(changes.state !== undefined ? { state: changes.state } : {}),
       ...(changes.deployedCommit !== undefined ? { deployedCommit: changes.deployedCommit } : {}),
       ...(changes.url !== undefined ? { url: changes.url } : {}),
+      ...(changes.deployInputs !== undefined ? { deployInputs: changes.deployInputs } : {}),
       updatedAt: this.#now(),
     };
     const swapped = await this.#store.compareAndSwap(
@@ -295,6 +343,46 @@ export class Registry {
       return { ok: false, reason: 'stale' };
     }
     return { ok: true, record: next, version: swapped.version };
+  }
+
+  /**
+   * Removes one recorded deploy-input value from the record, touching nothing else
+   * (chg-011, AC-37). Removes, never rewrites: a redacted record reads as "value
+   * withheld", not as a different deploy.
+   *
+   * Writes the way every registry mutation writes — read, compare-and-swap, retry on a
+   * lost race — so a concurrent writer's update is never clobbered and a collision is
+   * never surfaced as failure while attempts remain. And it changes *content*, never
+   * *state*: reactivation is a state transition to `active`, so a teardown re-confirming
+   * its claim must key on state and never read this write as a reactivation.
+   */
+  async redactInput(
+    repository: string,
+    identity: string,
+    name: string,
+  ): Promise<UpdateOutcome | { readonly ok: true; readonly record: null; readonly version: null }> {
+    for (let attempt = 0; attempt < CLAIM_ATTEMPTS; attempt += 1) {
+      const current = await this.read(repository, identity);
+      if (!current.ok) return { ok: false, reason: current.reason };
+      if (current.record === null) return { ok: false, reason: 'not-found' };
+      const inputs = current.record.deployInputs;
+      // Already absent is the state asked for — an idempotent success, like every
+      // teardown step that tolerates having already happened.
+      if (inputs === null || !(name in inputs)) {
+        return { ok: true, record: current.record, version: current.version };
+      }
+      const remaining = Object.fromEntries(
+        Object.entries(inputs).filter(([recorded]) => recorded !== name),
+      );
+      const outcome = await this.update(repository, identity, current.version, {
+        deployInputs: Object.keys(remaining).length > 0 ? remaining : null,
+      });
+      // A lost race means someone else moved the record; re-read and try again on the
+      // fresh version rather than reporting a refusal for a write nobody forbade.
+      if (!outcome.ok && (outcome.reason === 'stale' || outcome.reason === 'contended')) continue;
+      return outcome;
+    }
+    return { ok: false, reason: 'contended' };
   }
 
   /** Marks the environment eligible for teardown. It is not yet torn down, and its name is not yet free. */

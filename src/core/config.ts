@@ -72,7 +72,12 @@ function readDeploy(value: YamlValue | undefined, problems: string[]): DeployCon
     problems.push('deploy: expected a block of settings');
     return null;
   }
-  rejectUnknownKeys(value, ['directory', 'role_prefix'], 'deploy.', problems);
+  rejectUnknownKeys(
+    value,
+    ['directory', 'role_prefix', 'inputs', 'allow_sensitive_input_names'],
+    'deploy.',
+    problems,
+  );
 
   const directory = readRequiredString(value['directory'], 'deploy.directory', problems);
   const rawPrefix = value['role_prefix'];
@@ -85,8 +90,99 @@ function readDeploy(value: YamlValue | undefined, problems: string[]): DeployCon
     }
   }
 
+  const inputs = readInputs(value['inputs'], value['allow_sensitive_input_names'], problems);
+
   if (directory === null) return null;
-  return { directory, rolePrefix };
+  return { directory, rolePrefix, inputs };
+}
+
+/** The most names one repository may declare (AC-35). Mirrors AC-20's identity-length pattern: a bound refused where it is supplied. */
+const MAX_DECLARED_INPUTS = 16;
+
+/**
+ * The generic identifier class, deliberately not any one tool's full grammar: core stays
+ * provider-agnostic, and a name a tool additionally reserves is that tool's own loud
+ * refusal at first use (chg-011, the gap-001 lesson).
+ */
+const INPUT_NAME_PATTERN = /^[a-zA-Z_][a-zA-Z0-9_-]*$/;
+
+/**
+ * Defense-in-depth beside the settings file's warning, not the boundary: a declared
+ * value is recorded in the registry in the clear, so a name that says it holds a secret
+ * is refused unless the operator names it as an exception, per name, where a reviewer
+ * sees it (AC-35).
+ */
+const SENSITIVE_FRAGMENTS = ['secret', 'password', 'token', 'key', 'credential'];
+
+function readInputs(
+  value: YamlValue | undefined,
+  rawExceptions: YamlValue | undefined,
+  problems: string[],
+): readonly string[] {
+  const exceptions = readNameList(rawExceptions, 'deploy.allow_sensitive_input_names', problems);
+  if (value === undefined) {
+    for (const name of exceptions) {
+      problems.push(
+        `deploy.allow_sensitive_input_names: "${name}" names no declared input — likely a typo`,
+      );
+    }
+    return [];
+  }
+  const names = readNameList(value, 'deploy.inputs', problems);
+  if (names.length > MAX_DECLARED_INPUTS) {
+    problems.push(
+      `deploy.inputs: ${names.length} names declared, at most ${MAX_DECLARED_INPUTS} are supported`,
+    );
+  }
+  const seen = new Set<string>();
+  for (const name of names) {
+    if (seen.has(name)) {
+      problems.push(`deploy.inputs: "${name}" is declared twice`);
+      continue;
+    }
+    seen.add(name);
+    if (!INPUT_NAME_PATTERN.test(name)) {
+      problems.push(
+        `deploy.inputs: "${name}" is not a valid input name — a letter or "_" first, then letters, digits, "_" or "-"`,
+      );
+      continue;
+    }
+    const lowered = name.toLowerCase();
+    const fragment = SENSITIVE_FRAGMENTS.find((f) => lowered.includes(f));
+    if (fragment !== undefined && !exceptions.includes(name)) {
+      problems.push(
+        `deploy.inputs: "${name}" looks like it names a secret ("${fragment}"). Recorded values ` +
+          'are stored in the registry in the clear — if this input truly carries no secret, ' +
+          'list the exact name under deploy.allow_sensitive_input_names',
+      );
+    }
+  }
+  for (const name of exceptions) {
+    if (!seen.has(name)) {
+      problems.push(
+        `deploy.allow_sensitive_input_names: "${name}" names no declared input — likely a typo`,
+      );
+    }
+  }
+  return [...seen];
+}
+
+/** A flat list of strings, or problems. Non-strings are refused, never coerced. */
+function readNameList(value: YamlValue | undefined, path: string, problems: string[]): string[] {
+  if (value === undefined) return [];
+  if (!Array.isArray(value)) {
+    problems.push(`${path}: expected a list of names ("- name" lines)`);
+    return [];
+  }
+  const names: string[] = [];
+  for (const item of value) {
+    if (typeof item !== 'string' || item.trim() === '') {
+      problems.push(`${path}: expected every entry to be a name, got ${JSON.stringify(item)}`);
+      continue;
+    }
+    names.push(item);
+  }
+  return names;
 }
 
 function readStorage(value: YamlValue | undefined, problems: string[]): StorageConfig | null {
@@ -187,5 +283,5 @@ function rejectUnknownKeys(
 }
 
 function isMap(value: YamlValue): value is YamlMap {
-  return typeof value === 'object' && value !== null;
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }

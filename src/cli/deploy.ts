@@ -12,6 +12,7 @@ import { deployEnvironment, type DeployResult } from '../core/deploy.ts';
 import { GitHubConfigSource } from '../adapters/github/config-source.ts';
 import { GitHubTriggerSource } from '../adapters/github/event.ts';
 import { AwsAccessBroker } from '../adapters/aws/broker.ts';
+import { terraformInputSource } from '../adapters/terraform/inputs.ts';
 import type { CommandRunner } from './process.ts';
 
 /** The consuming repo's own apply failed. Distinct from skyhook failing (AC-18). */
@@ -56,6 +57,7 @@ export async function deploy(options: DeployOptions): Promise<number> {
       ...(options.now !== undefined ? { now: options.now } : {}),
     }),
     now: options.now ?? (() => Date.now()),
+    inputSource: terraformInputSource(options.env),
   });
 
   return report(result, options);

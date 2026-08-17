@@ -314,3 +314,31 @@ test('feat-006/AC-7 gap-001: a stray mark on a released record never blocks the 
   assert.equal(store.rawValue(registryKeyFor(REPO, 'staging')), undefined);
   assert.equal(store.rawValue(protectionKeyFor(REPO, 'staging')), undefined);
 });
+
+// --- the sweep replays the recorded inputs too (chg-001) ----------------------
+
+test('feat-003/AC-15 a sweep destroy carries the record’s recorded inputs', async () => {
+  const { ports, store, destroyer } = harness({ 482: 'closed' });
+  store.seed(
+    registryKeyFor(REPO, 'pr-482'),
+    JSON.stringify({
+      schemaVersion: 1,
+      repository: REPO,
+      identity: 'pr-482',
+      state: 'released',
+      deployedCommit: 'a1b2c3d4',
+      url: null,
+      deployInputs: { image_tag: 'a1b2c3d4' },
+      createdAt: '2026-08-15T00:00:00.000Z',
+      updatedAt: '2026-08-15T00:00:00.000Z',
+    }),
+  );
+  store.seed(`${stateDirFor(REPO, 'pr-482')}terraform.tfstate`, '{"resources":[]}');
+
+  const result = await sweepEnvironments(ports, REPO);
+
+  assert.equal(result.kind, 'swept');
+  if (result.kind !== 'swept') return;
+  assert.equal(entryFor(result.entries, 'pr-482').kind, 'destroyed');
+  assert.deepEqual(destroyer.requests[0]?.deployInputs, { image_tag: 'a1b2c3d4' });
+});
