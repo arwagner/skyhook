@@ -16,7 +16,7 @@
 import { identityFor } from './identity.ts';
 import { loadConfig, type ConfigSource } from './config.ts';
 import { deployInputValueProblem } from './registry.ts';
-import type { AccessBroker, EnvironmentDeployer, TriggerSource } from './ports.ts';
+import type { AccessBroker, DeployOutputs, EnvironmentDeployer, TriggerSource } from './ports.ts';
 import type { Registry } from './registry.ts';
 import type { SkyhookConfig } from './types.ts';
 
@@ -54,6 +54,8 @@ export type DeployResult =
       readonly identity: string;
       readonly commit: string;
       readonly url: string | null;
+      /** Every output the definition declares, for the calling workflow (AC-24). */
+      readonly outputs: DeployOutputs | null;
       /**
        * Skyhook's own share, excluding both of the consuming repo's steps — applying its
        * infrastructure, and preparing that definition beforehand (AC-14).
@@ -217,7 +219,15 @@ export async function deployEnvironment(ports: DeployPorts): Promise<DeployResul
     );
   }
 
-  return { kind: 'deployed', identity, commit: headCommit, url: applied.url, skyhookMs: elapsed(), notes };
+  return {
+    kind: 'deployed',
+    identity,
+    commit: headCommit,
+    url: applied.url,
+    outputs: applied.outputs,
+    skyhookMs: elapsed(),
+    notes,
+  };
 }
 
 /**

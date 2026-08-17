@@ -884,3 +884,41 @@ let it drift unnoticed.
       success, both untouched on a failed apply, and a repository declaring none deploys exactly
       as before. Trace `feat-002/AC-23` in `tests/deploy.test.ts` and
       `tests/deploy-command.test.ts`.
+
+## Phase 13 — every output handed back (authorized by `chg-008`)
+
+- [x] 13.1 (2026-08-17) The Terraform adapter's output read widens: one `terraform output -json` parse yields
+      both the `url` (unchanged) and the full document — names to verbatim JSON values, entries
+      whose `sensitive` flag is true omitted, with the omitted names surfaced so the caller can
+      log them. Trace `feat-002/AC-24` in `tests/deploy-adapters.test.ts`.
+      Files: `src/adapters/terraform/environment.ts`, `src/core/ports.ts`,
+      `tests/deploy-adapters.test.ts`.
+- [x] 13.2 (2026-08-17) The document rides the deploy result to the calling workflow: core passes it through
+      untouched; the CLI writes it to `GITHUB_OUTPUT` as `outputs` — one compact JSON line on
+      success, `{}` for a no-output definition, `""` on skip and on failure — and logs each
+      omitted sensitive name; `action.yml` declares the output and changes no permission. Nothing
+      is recorded in the registry. Trace `feat-002/AC-24` in `tests/deploy.test.ts` and
+      `tests/deploy-command.test.ts`.
+      Files: `src/core/deploy.ts`, `src/cli/deploy.ts`, `action.yml`, `tests/deploy.test.ts`,
+      `tests/deploy-command.test.ts`.
+- [x] 13.3 (2026-08-17; delimiter now node:crypto randomBytes(16), throws on collision) Harden the shared `GITHUB_OUTPUT` writer (`appendOutput`): frame every value with a
+      delimiter generated fresh per write from `node:crypto` (≥128 bits), never
+      `skyhook-<name>-<length>`, so no output value — `url` or an `outputs` document — can
+      reproduce its closing marker and inject a further output; if a value nonetheless contains
+      the chosen delimiter line, throw rather than write an unsafe frame. No randomness-injection
+      seam is needed or wanted: the test reads back the written file, extracts the actual marker,
+      and asserts it does not occur as a line inside the value — a seeded generator would only
+      weaken production. Tests: a value equal to the old marker, and a multiline value, inject
+      nothing; the unfiltered `terraform output -json` result is never logged, written, or put in
+      an error, on success, parse-failure, and non-zero-exit paths. Trace `feat-002/AC-25` in
+      `tests/deploy-command.test.ts` and `tests/deploy-adapters.test.ts`.
+      Files: `src/cli/deploy.ts`, `src/adapters/terraform/environment.ts`,
+      `tests/deploy-command.test.ts`, `tests/deploy-adapters.test.ts`. Also fixes `url`, whose
+      write had the same weakness before this change existed.
+- [x] 13.4 (2026-08-17) The size ceiling: an `outputs` document approaching GitHub's ~1 MB per-value limit is
+      replaced by a valid-JSON object holding the reserved key `__skyhook_truncated` (which no
+      Terraform output name can be, so a workflow can branch on it), whose value names the reason
+      and omitted byte size but embeds no output content; the run emits a workflow warning
+      annotation as well as a log line, and the deploy result stays `deployed`. The check runs on
+      the post-omission compact document. Trace `feat-002/AC-26` in `tests/deploy-command.test.ts`.
+      Files: `src/cli/deploy.ts`, `tests/deploy-command.test.ts`.

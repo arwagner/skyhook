@@ -16,6 +16,7 @@ import { readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type {
   DeployOutcome,
+  DeployOutputs,
   DeployRequest,
   DeployTiming,
   DestroyOutcome,
@@ -186,8 +187,13 @@ export class TerraformEnvironment implements EnvironmentDeployer, EnvironmentDes
         return skyhookFailed(orphan, { preparationMs, initMs, applyMs });
       }
 
-      const url = await this.#readUrl(terraform);
-      return { ok: true, url, timing: { preparationMs, initMs, applyMs } };
+      const read = await this.#readOutputs(terraform);
+      return {
+        ok: true,
+        url: read.url,
+        outputs: read.outputs,
+        timing: { preparationMs, initMs, applyMs },
+      };
     } catch (error) {
       // A throw is a surprise rather than a command exiting non-zero, so whatever it cost
       // goes to skyhook: if it lands mid-init, `initMs` is still 0 and that time counts
@@ -400,22 +406,42 @@ export class TerraformEnvironment implements EnvironmentDeployer, EnvironmentDes
   }
 
   /**
-   * The environment's address, if the definition names one.
+   * Every output the definition declares, read in one `terraform output -json` — the URL is
+   * simply the `url` entry of the same document. No new invocation, so the budget is unchanged.
    *
-   * A definition that declares no `url` output still deploys — skyhook does not validate
-   * the repository's Terraform, and inventing a hard failure for a missing output would be
-   * exactly that. The caller reports the absence instead.
+   * A definition that declares no output still deploys — skyhook does not validate the
+   * repository's Terraform, and inventing a hard failure for a missing output would be exactly
+   * that. An unreadable document yields a null address and null outputs; the caller reports it.
    */
-  async #readUrl(terraform: Terraform): Promise<string | null> {
-    const outputs = await terraform.outputJson();
-    if (outputs.code !== 0) return null;
+  async #readOutputs(
+    terraform: Terraform,
+  ): Promise<{ url: string | null; outputs: DeployOutputs | null }> {
+    const result = await terraform.outputJson();
+    if (result.code !== 0) return { url: null, outputs: null };
+    let parsed: Record<string, { value?: unknown; sensitive?: unknown }>;
     try {
-      const parsed = JSON.parse(outputs.stdout) as Record<string, { value?: unknown }>;
-      const value = parsed['url']?.value;
-      return typeof value === 'string' && value !== '' ? value : null;
+      parsed = JSON.parse(result.stdout) as typeof parsed;
     } catch {
-      return null;
+      return { url: null, outputs: null };
     }
+
+    // Sensitive outputs are dropped here and never returned: `terraform output -json` carries
+    // their values in the clear with a `sensitive: true` marker, so the raw parse must not
+    // travel past this function (AC-25). Only the filtered document and the omitted names leave.
+    const document: Record<string, unknown> = {};
+    const omittedSensitive: string[] = [];
+    for (const [name, entry] of Object.entries(parsed)) {
+      if (entry?.sensitive === true) {
+        omittedSensitive.push(name);
+        continue;
+      }
+      document[name] = entry?.value;
+    }
+    omittedSensitive.sort();
+
+    const url =
+      typeof document['url'] === 'string' && document['url'] !== '' ? document['url'] : null;
+    return { url, outputs: { document, omittedSensitive } };
   }
 }
 

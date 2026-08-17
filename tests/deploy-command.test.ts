@@ -328,3 +328,102 @@ test('feat-002/AC-22 the value rides the run environment: set, the refusal does 
   assert.equal(code, 1);
   assert.doesNotMatch(err.lines.join(' '), /TF_VAR_image_tag/, 'the input refusal did not fire');
 });
+
+// --- outputs, injection-safety, and size at the CLI seam (chg-008) ------------
+
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { deployOutputsFor, appendOutput } from '../src/cli/deploy.ts';
+
+function deployedResult(outputs: {
+  document: Record<string, unknown>;
+  omittedSensitive: string[];
+} | null) {
+  return {
+    kind: 'deployed' as const,
+    identity: 'pr-482',
+    commit: 'a1b2c3',
+    url: 'https://pr-482.example',
+    outputs,
+    skyhookMs: 100,
+    notes: [] as string[],
+  };
+}
+
+test('feat-002/AC-24 outputs is one compact JSON line on success, {} for no outputs, "" on skip/fail', async () => {
+  const written = new Map<string, string>();
+  const w = (n: string, v: string) => written.set(n, v);
+
+  deployOutputsFor(deployedResult({ document: { web_bucket: 'b', cdn: { id: 'E1' } }, omittedSensitive: [] }), w, () => {});
+  const doc = written.get('outputs') ?? '';
+  assert.equal(doc.includes('\n'), false, 'compact, single line');
+  assert.deepEqual(JSON.parse(doc), { web_bucket: 'b', cdn: { id: 'E1' } });
+
+  written.clear();
+  deployOutputsFor(deployedResult({ document: {}, omittedSensitive: [] }), w, () => {});
+  assert.equal(written.get('outputs'), '{}');
+
+  written.clear();
+  deployOutputsFor({ kind: 'skipped', message: 'fork' }, w, () => {});
+  assert.equal(written.get('outputs'), '');
+});
+
+test('feat-002/AC-24 the omitted sensitive names are logged, their values never', async () => {
+  const logs: string[] = [];
+  deployOutputsFor(
+    deployedResult({ document: { url: 'https://x' }, omittedSensitive: ['db_password'] }),
+    () => {},
+    (l) => logs.push(l),
+  );
+  assert.match(logs.join(' '), /db_password/);
+});
+
+test('feat-002/AC-25 a crafted value cannot inject a second output', () => {
+  // A value engineered to reproduce the OLD length-derived marker and forge a second output.
+  const name = 'url';
+  const evil = `x\nskyhook-${name}-1\nurl_inject<<M\nowned\nM`;
+  const dir = mkdtempSync(join(tmpdir(), 'skyhook-out-'));
+  const file = join(dir, 'gh-output');
+  writeFileSync(file, '');
+  appendOutput({ GITHUB_OUTPUT: file }, name, evil);
+  const body = readFileSync(file, 'utf8');
+  // The heredoc is `url<<MARKER\n<value>\nMARKER\n`. The forged `url_inject<<M` line is inert
+  // because it sits between the two random markers — only a line equal to MARKER closes it,
+  // and the value cannot contain the random MARKER it never saw. Parse it the way the runner
+  // does and assert exactly one output, its value the whole evil string.
+  const nl = body.indexOf('\n');
+  const header = body.slice(0, nl); // url<<MARKER
+  const marker = header.slice(`${name}<<`.length);
+  const rest = body.slice(nl + 1);
+  const close = `\n${marker}\n`;
+  const end = rest.indexOf(close);
+  assert.ok(end >= 0, 'the value is closed by the random marker');
+  assert.equal(rest.slice(0, end), evil, 'the whole crafted value is one inert value');
+  assert.equal(rest.slice(end + close.length), '', 'nothing follows: no second output injected');
+  rmSync(dir, { recursive: true, force: true });
+});
+
+test('feat-002/AC-26 an oversized document truncates to the reserved marker, deploy stays deployed', async () => {
+  const written = new Map<string, string>();
+  const logs: string[] = [];
+  const huge = 'x'.repeat(1_100_000);
+  deployOutputsFor(
+    deployedResult({ document: { blob: huge }, omittedSensitive: [] }),
+    (n, v) => written.set(n, v),
+    (l) => logs.push(l),
+  );
+  const doc = JSON.parse(written.get('outputs') ?? '{}');
+  assert.ok('__skyhook_truncated' in doc, 'the reserved key names the omission');
+  assert.equal(doc.blob, undefined, 'the oversized content is gone');
+  assert.ok(!(doc.__skyhook_truncated as string).includes('xxxxx'), 'the reason embeds no content');
+  assert.match(logs.join(' '), /::warning::/);
+});
+
+test('feat-002/AC-24 action.yml declares the outputs output and no new permission', () => {
+  const action = readFileSync(ACTION, 'utf8');
+  assert.match(action, /^ {2}outputs:/m, 'the outputs output is declared');
+  assert.match(action, /steps\.deploy\.outputs\.outputs/, 'wired to the deploy step');
+  // The scaffolded action asks for nothing to write to a pull request, unchanged (AC-15).
+  assert.equal(/pull-requests:\s*write/.test(action), false, 'no pull-request write permission');
+  assert.equal(/permissions:/.test(action), false, 'the composite action declares no permissions block');
+});
