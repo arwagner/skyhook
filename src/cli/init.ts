@@ -219,7 +219,7 @@ jobs:
       - id: skyhook
         # Pin this to a tag once skyhook publishes one. \`@main\` means you run whatever is on
         # skyhook's default branch at the time your pull request opens.
-        uses: skylight-hq/skyhook@main
+        uses: arwagner/skyhook@main
         with:
           # A manually dispatched run carries its verb and its target from the inputs above.
           # Every other trigger ignores them: what triggered the run decides the verb.

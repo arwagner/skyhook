@@ -2,7 +2,7 @@
 #
 # Reference this from a workflow on your repository's DEFAULT BRANCH:
 #
-#   uses: skylight-hq/skyhook@<ref>
+#   uses: arwagner/skyhook@<ref>
 #
 # The ref pins whose code runs. A pull request can edit the workflow that calls this — and
 # doing so gains it no wider credentials, because what a run may assume is decided by what
