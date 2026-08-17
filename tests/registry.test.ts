@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { FakeStore } from './fake-store.ts';
 import {
   Registry,
+  isClaimable,
   protectionKeyFor,
   registryKeyFor,
 } from '../src/core/registry.ts';
@@ -529,4 +530,206 @@ test('feat-001/AC-37 redaction retries a lost race instead of failing or clobber
   assert.equal(read.ok, true);
   if (!read.ok || read.record === null) return;
   assert.deepEqual(read.record.deployInputs, { image_tag: 'abc123' });
+});
+
+// --- warm slots and the pool claim (feat-007, chg-012) -----------------------
+
+/** A claimable warm slot: fresh-claimed `warm`, then given its build's commit and URL. */
+async function seedClaimableSlot(
+  registry: Registry,
+  identity: string,
+): Promise<{ version: string }> {
+  const claimed = await registry.claim({ repository: REPO, identity, state: 'warm' });
+  assert.ok(claimed.ok, `seeding ${identity}: claim refused`);
+  if (!claimed.ok) throw new Error('unreachable');
+  const updated = await registry.update(REPO, identity, claimed.version, {
+    deployedCommit: 'main-commit',
+    url: `https://${identity}.example.test`,
+  });
+  assert.ok(updated.ok, `seeding ${identity}: update refused`);
+  if (!updated.ok) throw new Error('unreachable');
+  return { version: updated.version };
+}
+
+test('feat-001/AC-39 a warm record is claimable exactly when it carries a deployed commit', async () => {
+  const registry = makeRegistry(new FakeStore());
+  const claimed = await registry.claim({ repository: REPO, identity: 'slot-1', state: 'warm' });
+  assert.ok(claimed.ok);
+  if (!claimed.ok) return;
+  // Build in progress: warm, no commit — not claimable.
+  assert.equal(claimed.record.state, 'warm');
+  assert.equal(isClaimable(claimed.record), false);
+  const updated = await registry.update(REPO, 'slot-1', claimed.version, {
+    deployedCommit: 'main-commit',
+    url: 'https://slot-1.example.test',
+  });
+  assert.ok(updated.ok);
+  if (!updated.ok) return;
+  assert.equal(updated.record.state, 'warm', 'recording the build leaves the slot warm');
+  assert.equal(isClaimable(updated.record), true);
+  // An active record is never claimable, commit or not.
+  assert.equal(
+    isClaimable({ ...updated.record, state: 'active' }),
+    false,
+  );
+});
+
+test('feat-001/AC-39 warm state and claimant survive a store round-trip; old records read back unchanged', async () => {
+  const store = new FakeStore();
+  const registry = makeRegistry(store);
+  await seedClaimableSlot(registry, 'slot-1');
+  const readBack = await registry.read(REPO, 'slot-1');
+  assert.ok(readBack.ok);
+  if (!readBack.ok || readBack.record === null) return assert.fail('record missing');
+  assert.equal(readBack.record.state, 'warm');
+  assert.equal(readBack.record.claimant, null);
+
+  // A record written before the claimant field existed reads back with null, never refused.
+  const legacy = JSON.stringify({
+    schemaVersion: 1,
+    repository: REPO,
+    identity: 'pr-9',
+    state: 'active',
+    deployedCommit: 'abc',
+    createdAt: '2026-08-01T00:00:00.000Z',
+    updatedAt: '2026-08-01T00:00:00.000Z',
+  });
+  store.seed(registryKeyFor(REPO, 'pr-9'), legacy);
+  const legacyRead = await registry.read(REPO, 'pr-9');
+  assert.ok(legacyRead.ok);
+  if (legacyRead.ok && legacyRead.record !== null) {
+    assert.equal(legacyRead.record.claimant, null);
+  }
+});
+
+test('feat-001/AC-16 a fresh claim against a warm record is refused as reserved for the pool', async () => {
+  // The third distinguishable refusal (chg-012): not `held`, not `awaiting-teardown`.
+  const registry = makeRegistry(new FakeStore());
+  await seedClaimableSlot(registry, 'slot-1');
+  const refused = await registry.claim({ repository: REPO, identity: 'slot-1' });
+  assert.equal(refused.ok, false);
+  if (!refused.ok) assert.equal(refused.reason, 'pool-reserved');
+});
+
+test('feat-001/AC-38 the pool claim is one conditional write: warm to active, claimant recorded', async () => {
+  const registry = makeRegistry(new FakeStore());
+  const { version } = await seedClaimableSlot(registry, 'slot-1');
+  const claimed = await registry.poolClaim(REPO, 'slot-1', 482, version);
+  assert.ok(claimed.ok);
+  if (!claimed.ok) return;
+  assert.equal(claimed.record.state, 'active');
+  assert.equal(claimed.record.claimant, 482);
+  // The build's commit and URL are untouched by the claim itself.
+  assert.equal(claimed.record.deployedCommit, 'main-commit');
+  assert.equal(claimed.record.url, 'https://slot-1.example.test');
+});
+
+test('feat-001/AC-38 the registry, not the caller, refuses a commitless warm record', async () => {
+  const registry = makeRegistry(new FakeStore());
+  const claimed = await registry.claim({ repository: REPO, identity: 'slot-1', state: 'warm' });
+  assert.ok(claimed.ok);
+  if (!claimed.ok) return;
+  const refused = await registry.poolClaim(REPO, 'slot-1', 482, claimed.version);
+  assert.equal(refused.ok, false);
+  if (!refused.ok) assert.equal(refused.reason, 'not-claimable');
+  const readBack = await registry.read(REPO, 'slot-1');
+  assert.ok(readBack.ok && readBack.ok && readBack.record?.state === 'warm', 'nothing was written');
+});
+
+test('feat-001/AC-38 a stale version is a genuine loss, distinguishable from contention', async () => {
+  const registry = makeRegistry(new FakeStore());
+  const { version } = await seedClaimableSlot(registry, 'slot-1');
+  const winner = await registry.poolClaim(REPO, 'slot-1', 482, version);
+  assert.ok(winner.ok);
+  const loser = await registry.poolClaim(REPO, 'slot-1', 500, version);
+  assert.equal(loser.ok, false);
+  if (!loser.ok) assert.equal(loser.reason, 'lost');
+});
+
+test('feat-007/AC-5 two concurrent pool claims of one slot: exactly one wins', async () => {
+  let release = (): void => {};
+  const parked = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  let arrived = 0;
+  let racing = false; // the seeding writes must not park; only the two racing claims do
+  const store = new FakeStore({
+    beforeCommit: async () => {
+      if (!racing) return;
+      arrived += 1;
+      if (arrived <= 2) await parked;
+    },
+  });
+  const registry = makeRegistry(store);
+  const { version } = await seedClaimableSlot(registry, 'slot-1');
+  racing = true;
+
+  const both = Promise.all([
+    registry.poolClaim(REPO, 'slot-1', 482, version),
+    registry.poolClaim(REPO, 'slot-1', 500, version),
+  ]);
+  // The pool claim reads before it writes, so give both calls the turns they need to
+  // reach their commit — bounded, so a regression fails instead of hanging.
+  for (let turn = 0; arrived < 2 && turn < 100; turn += 1) {
+    await new Promise<void>((resolve) => setImmediate(resolve));
+  }
+  assert.equal(arrived, 2, 'both claims are in flight before either commits');
+  release();
+
+  const [first, second] = await both;
+  const winners = [first, second].filter((o) => o.ok);
+  const losers = [first, second].filter((o) => !o.ok);
+  assert.equal(winners.length, 1, 'exactly one pool claim succeeds');
+  assert.equal(losers.length, 1);
+  if (losers[0]?.ok === false) assert.equal(losers[0].reason, 'lost');
+  // Exactly one claimant is recorded, and it is the winner's.
+  const readBack = await registry.read(REPO, 'slot-1');
+  assert.ok(readBack.ok && readBack.record !== null);
+  if (readBack.ok && readBack.record !== null) {
+    const winning = winners[0];
+    assert.ok(winning?.ok);
+    if (winning?.ok) assert.equal(readBack.record.claimant, winning.record.claimant);
+  }
+});
+
+test('feat-001/AC-38 a pool claim against an active or released record is not claimable', async () => {
+  const registry = makeRegistry(new FakeStore());
+  const active = await registry.claim({ repository: REPO, identity: 'pr-1' });
+  assert.ok(active.ok);
+  if (!active.ok) return;
+  const refused = await registry.poolClaim(REPO, 'pr-1', 482, active.version);
+  assert.equal(refused.ok, false);
+  if (!refused.ok) assert.equal(refused.reason, 'not-claimable');
+});
+
+test('feat-007/AC-13 findSlotByClaimant finds the one slot a pull request holds', async () => {
+  const registry = makeRegistry(new FakeStore());
+  const { version } = await seedClaimableSlot(registry, 'slot-1');
+  await seedClaimableSlot(registry, 'slot-2');
+  await registry.claim({ repository: REPO, identity: 'pr-482' }); // a non-slot record is ignored
+  const claimed = await registry.poolClaim(REPO, 'slot-1', 482, version);
+  assert.ok(claimed.ok);
+
+  const found = await registry.findSlotByClaimant(REPO, 482);
+  assert.ok(found.ok);
+  if (found.ok) {
+    assert.equal(found.slot?.identity, 'slot-1');
+    assert.equal(found.slot?.record.claimant, 482);
+  }
+  const none = await registry.findSlotByClaimant(REPO, 999);
+  assert.ok(none.ok);
+  if (none.ok) assert.equal(none.slot, null);
+});
+
+test('feat-007/AC-5 listSlots orders slots by number, not lexically', async () => {
+  const registry = makeRegistry(new FakeStore());
+  for (const n of [10, 2, 1]) await seedClaimableSlot(registry, `slot-${n}`);
+  const listed = await registry.listSlots(REPO);
+  assert.ok(listed.ok);
+  if (listed.ok) {
+    assert.deepEqual(
+      listed.slots.map((s) => s.identity),
+      ['slot-1', 'slot-2', 'slot-10'],
+    );
+  }
 });

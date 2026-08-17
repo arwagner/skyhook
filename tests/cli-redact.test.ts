@@ -114,6 +114,7 @@ test('feat-001/AC-37 redacting through the CLI removes the one value and reports
       registry,
       store,
       destroyerFor: async () => ({ ok: false, problem: 'redaction never needs a destroyer' }),
+      builderFor: async () => ({ ok: false, problem: 'redaction never needs a builder' }),
     },
   });
 
@@ -145,6 +146,7 @@ test('feat-001/AC-37 redacting on an environment with no record fails, naming it
       registry,
       store,
       destroyerFor: async () => ({ ok: false, problem: 'redaction never needs a destroyer' }),
+      builderFor: async () => ({ ok: false, problem: 'redaction never needs a builder' }),
     },
   });
   const err = collect();

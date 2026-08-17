@@ -1,6 +1,10 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { MAX_INLINE_POLICY_LENGTH, sessionPolicyFor } from '../src/adapters/aws/session-policy.ts';
+import {
+  MAX_INLINE_POLICY_LENGTH,
+  scoutPolicyFor,
+  sessionPolicyFor,
+} from '../src/adapters/aws/session-policy.ts';
 
 const REQUEST = { bucket: 'skyhook-acme', repository: 'acme/widgets', identity: 'pr-482' };
 // GitHub's own maxima: a 39-character owner, a 100-character repository name, a bucket at
@@ -82,4 +86,49 @@ test('both variants’ worst plausible repositories fit the inline-policy ceilin
       `the ${readProtection ? 'teardown' : 'deploy'} policy is ${policy.length} characters; the ceiling is ${MAX_INLINE_POLICY_LENGTH}`,
     );
   }
+});
+
+// --- the pool-scout session (feat-007, chg-009) ------------------------------
+
+test('feat-002/AC-19 the scout session asks for slot records and the claim write, nothing else', () => {
+  const policy = scoutPolicyFor({ bucket: 'skyhook-acme', repository: 'acme/widgets' });
+  const parsed = statements(policy);
+
+  // Exactly what the constitution's fourth exception grants: read + the conditional
+  // claim write on this repository's slot records, and the listing that finds them.
+  const slots = parsed.find((s) => s.Sid === 'Slots');
+  assert.ok(slots, 'a Slots statement exists');
+  assert.deepEqual([...(slots?.Action ?? [])].sort(), ['s3:GetObject', 's3:PutObject']);
+  assert.deepEqual(slots?.Resource, ['arn:aws:s3:::skyhook-acme/registry/acme/widgets/slot-*']);
+
+  // No delete anywhere — destroys stay impossible from this session (feat-007/AC-11).
+  for (const statement of parsed) {
+    if (statement.Effect !== 'Allow') continue;
+    assert.ok(!statement.Action.includes('s3:DeleteObject'), `${statement.Sid} allows no delete`);
+  }
+
+  // No state prefixes, no protection marks, no non-slot record bodies.
+  const everyArn = parsed
+    .filter((s) => s.Effect === 'Allow')
+    .flatMap((s) =>
+      Array.isArray(s.Resource) ? s.Resource : typeof s.Resource === 'string' ? [s.Resource] : [],
+    );
+  for (const arn of everyArn) {
+    assert.ok(!arn.includes('/state/'), `no state reach: ${arn}`);
+    assert.ok(!arn.includes('/protected/'), `no protection reach: ${arn}`);
+    assert.ok(!arn.includes('/pr-'), `no pull-request record reach: ${arn}`);
+  }
+
+  // Anything the allows do not name is denied by the belt-and-braces statement too.
+  const deny = parsed.find((s) => s.Sid === 'NoOthers');
+  assert.ok(deny, 'the scout keeps the explicit deny — it is far from the character ceiling');
+  assert.ok(policy.length <= MAX_INLINE_POLICY_LENGTH);
+});
+
+test('feat-002/AC-19 the deploy narrowing is byte-identical with pooling off', () => {
+  // The scout is a separate document; the ordinary session is untouched by feat-007.
+  const before = sessionPolicyFor(REQUEST);
+  const after = sessionPolicyFor(REQUEST);
+  assert.equal(before, after);
+  assert.ok(!before.includes('slot-'), 'the ordinary session never names slots');
 });

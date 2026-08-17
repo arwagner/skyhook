@@ -1,4 +1,10 @@
-import type { DeployConfig, EnvironmentCap, SkyhookConfig, StorageConfig } from './types.ts';
+import type {
+  DeployConfig,
+  EnvironmentCap,
+  PoolConfig,
+  SkyhookConfig,
+  StorageConfig,
+} from './types.ts';
 import { parseYamlSubset, type YamlMap, type YamlValue } from './yaml.ts';
 
 /**
@@ -46,14 +52,15 @@ export function parseConfig(document: string | null): ConfigOutcome {
 
   const problems: string[] = [];
   const root = parsed.value;
-  rejectUnknownKeys(root, ['storage', 'environment_cap', 'deploy'], '', problems);
+  rejectUnknownKeys(root, ['storage', 'environment_cap', 'deploy', 'pool'], '', problems);
 
   const storage = readStorage(root['storage'], problems);
   const environmentCap = readCap(root['environment_cap'], problems);
   const deploy = readDeploy(root['deploy'], problems);
+  const pool = readPool(root['pool'], problems);
 
   if (problems.length > 0 || storage === null) return { ok: false, problems };
-  return { ok: true, config: { storage, environmentCap, deploy } };
+  return { ok: true, config: { storage, environmentCap, deploy, pool } };
 }
 
 /** The default role name prefix, matching the bootstrap's own `name_prefix` default. */
@@ -183,6 +190,31 @@ function readNameList(value: YamlValue | undefined, path: string, problems: stri
     names.push(item);
   }
   return names;
+}
+
+/**
+ * Absent means pooling is off (feat-007/AC-1), and so does an explicit target of zero —
+ * normalized to null here so `pool === null` is the one off-check everywhere. A malformed
+ * target is refused loudly, never defaulted: a typo silently reading as "off" would stop
+ * the pool replenishing and nobody would notice until the next cold deploy.
+ */
+function readPool(value: YamlValue | undefined, problems: string[]): PoolConfig | null {
+  if (value === undefined) return null;
+  if (!isMap(value)) {
+    problems.push('pool: expected a block of settings');
+    return null;
+  }
+  rejectUnknownKeys(value, ['target'], 'pool.', problems);
+  const rawTarget = value['target'];
+  if (rawTarget === undefined) {
+    problems.push('pool.target: required — how many claimable warm slots to keep standing');
+    return null;
+  }
+  if (typeof rawTarget !== 'number' || !Number.isInteger(rawTarget) || rawTarget < 0) {
+    problems.push('pool.target: expected a whole number of 0 or more');
+    return null;
+  }
+  return rawTarget === 0 ? null : { target: rawTarget };
 }
 
 function readStorage(value: YamlValue | undefined, problems: string[]): StorageConfig | null {

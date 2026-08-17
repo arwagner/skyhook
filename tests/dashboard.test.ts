@@ -17,6 +17,7 @@ function record(overrides: Partial<EnvironmentRecord> & { identity: string }): E
     deployedCommit: 'abc123def456',
     url: 'https://pr-482.example.test',
     deployInputs: null,
+    claimant: null,
     createdAt: '2026-08-14T00:00:00.000Z',
     updatedAt: '2026-08-15T12:30:00.000Z',
     ...overrides,
@@ -223,4 +224,46 @@ test('feat-005/AC-4 a record without recorded inputs shows nothing for them — 
   const page = renderDashboardPage(buildDashboardModel(REPO, [rec], [], CAP));
   const detail = page.slice(page.indexOf('<section id="env-pr-9"'));
   assert.ok(!/[Ii]nput/.test(detail), 'no inputs row, and no pending marker in its place');
+});
+
+// --- the warm slot pool (feat-005 chg-002, with feat-007) ---------------------
+
+test('feat-005/AC-8 a warm slot renders as its own condition, and is never shown reclaimable', () => {
+  const model = buildDashboardModel(
+    REPO,
+    [
+      record({ identity: 'slot-1', state: 'warm', deployedCommit: 'main-head' }),
+      record({ identity: 'slot-2', state: 'warm', deployedCommit: null, url: null }),
+    ],
+    [],
+    CAP,
+  );
+  const page = renderDashboardPage(model);
+  assert.match(page, /warm — claimable/);
+  assert.match(page, /warm — building/);
+  assert.ok(
+    !page.includes('<strong>reclaimable</strong>') && !page.includes('class="reclaimable"'),
+    'a warm slot is the pool doing its job, not freeable',
+  );
+  // Warm slots count in the cap line exactly as the registry counts them (od-3).
+  assert.match(page, /2 of 5 environments used\./);
+});
+
+test('feat-005/AC-8 a claimed slot shows its claimant pull request; others still derive from the identity', () => {
+  const model = buildDashboardModel(
+    REPO,
+    [
+      record({ identity: 'slot-1', state: 'active', claimant: 482 }),
+      record({ identity: 'pr-9', state: 'active' }),
+      record({ identity: 'staging', state: 'active' }),
+    ],
+    [],
+    CAP,
+  );
+  const rows = new Map(model.rows.map((row) => [row.record.identity, row]));
+  assert.equal(rows.get('slot-1')?.pullRequest, 482, 'the claimant is the recorded source for a slot');
+  assert.equal(rows.get('pr-9')?.pullRequest, 9, 'identities still derive');
+  assert.equal(rows.get('staging')?.pullRequest, null, 'no number is ever guessed');
+  const page = renderDashboardPage(model);
+  assert.match(page, /Claimant pull request<\/dt><dd>482/);
 });

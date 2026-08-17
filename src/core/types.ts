@@ -5,6 +5,12 @@
 
 /** A deployed copy of a consuming repo's infrastructure is in exactly one state. */
 export type EnvironmentState =
+  /**
+   * Skyhook's own, built or being built ahead of any pull request, belonging to nobody
+   * yet (feat-007, chg-012). Claimable once its record carries a deployed commit; only
+   * pooling creates one, and an installation with pooling off never holds one.
+   */
+  | 'warm'
   /** In use. Must not be destroyed. */
   | 'active'
   /** Eligible for teardown. The infrastructure may still be standing. */
@@ -49,6 +55,14 @@ export interface EnvironmentRecord {
    * null, and every reader treats that as "none recorded".
    */
   readonly deployInputs: Readonly<Record<string, string>> | null;
+  /**
+   * The pull request that claimed this warm slot, or null everywhere else (feat-007,
+   * chg-012 AC-39). For a pooled environment the claimant — never the identity — says
+   * which pull request owns it; for every other environment the identity already does.
+   *
+   * Additive like `url`: records written before the field existed read back with null.
+   */
+  readonly claimant: number | null;
   /** ISO-8601 UTC. */
   readonly createdAt: string;
   /** ISO-8601 UTC. */
@@ -105,9 +119,20 @@ export interface DeployConfig {
   readonly inputs: readonly string[];
 }
 
+/**
+ * The warm slot pool's one setting (feat-007, od-1/od-3): how many claimable warm slots
+ * the repository wants standing. Null — the whole config field — means pooling is off
+ * and every pool behavior is inert; a parsed target of zero normalizes to null so
+ * `pool === null` is the one off-check everywhere.
+ */
+export interface PoolConfig {
+  readonly target: number;
+}
+
 /** The settings a consuming repo supplies in `.skyhook/config.yml`. */
 export interface SkyhookConfig {
   readonly environmentCap: EnvironmentCap;
   readonly storage: StorageConfig;
   readonly deploy: DeployConfig | null;
+  readonly pool: PoolConfig | null;
 }

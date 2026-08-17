@@ -17,13 +17,21 @@
  */
 
 import { join } from 'node:path';
-import type { AccessBroker, AccessOutcome, AccessRequest, EnvironmentDestroyer } from '../../core/ports.ts';
+import type {
+  AccessBroker,
+  AccessOutcome,
+  AccessRequest,
+  EnvironmentDeployer,
+  EnvironmentDestroyer,
+  ScoutOutcome,
+  ScoutRequest,
+} from '../../core/ports.ts';
 import { Registry } from '../../core/registry.ts';
 import type { Store } from '../../core/store.ts';
 import type { SkyhookConfig } from '../../core/types.ts';
 import { S3Store } from './s3-store.ts';
 import { assumeRoleWithWebIdentity, type AssumedCredentials } from './sts.ts';
-import { sessionPolicyFor } from './session-policy.ts';
+import { scoutPolicyFor, sessionPolicyFor } from './session-policy.ts';
 import { requestIdToken } from '../github/oidc-token.ts';
 import { fetchDefinition, type FetchTarget } from '../git/commit-fetch.ts';
 import { TerraformEnvironment } from '../terraform/environment.ts';
@@ -148,6 +156,53 @@ export class AwsAccessBroker implements AccessBroker {
   }
 
   /**
+   * The pool-scout session (feat-007 plan D4, chg-009): the pull-request role under the
+   * scout policy — this repository's slot records, read plus the conditional claim
+   * write, and nothing else. Opened before the ordinary narrowed session, because which
+   * environment to narrow to is exactly what the scout finds out.
+   */
+  async openScout(request: ScoutRequest): Promise<ScoutOutcome> {
+    const { config, repository } = request;
+    const account = config.storage.account;
+    const deploySettings = config.deploy;
+    if (account === null || deploySettings === null) {
+      return { ok: false, problem: 'configuration is incomplete: pooling needs storage.account and the deploy block' };
+    }
+    const region = config.storage.region;
+    const role = roleArn(account, `${deploySettings.rolePrefix}-pull-request`);
+
+    const token = await requestIdToken(STS_AUDIENCE, this.#tokenOptions());
+    if (!token.ok) return { ok: false, problem: token.problem };
+    const scout = await assumeRoleWithWebIdentity(
+      {
+        region,
+        roleArn: role,
+        roleSessionName: 'skyhook-pool-scout',
+        webIdentityToken: token.token,
+        policy: scoutPolicyFor({ bucket: config.storage.bucket, repository }),
+      },
+      this.#stsOptions(),
+    );
+    if (!scout.ok) {
+      return {
+        ok: false,
+        problem:
+          `skyhook could not open the pool-scout session on ${role} (${scout.code}). ` +
+          'Pooling needs the bootstrap that grants the pull-request role its slot-record ' +
+          'reach — re-run `skyhook bootstrap` after enabling pool.target.',
+      };
+    }
+
+    const store = new S3Store({
+      bucket: config.storage.bucket,
+      region,
+      credentials: credentialsFor(scout.credentials),
+      ...(this.#options.fetch !== undefined ? { fetch: this.#options.fetch } : {}),
+    });
+    return { ok: true, registry: new Registry(store) };
+  }
+
+  /**
    * Access for the close fast path's teardown (feat-003 plan D4): skyhook's pull-request
    * role under the teardown session variant — narrowed to this one environment, asking to
    * read its protection marker — plus, per destroy, the deploy role and the definition at
@@ -228,7 +283,89 @@ export class AwsAccessBroker implements AccessBroker {
         store,
         destroyerFor: (identity, target) =>
           this.#acquireDestroyer(config, repository, identity, target, (prefix) => `${prefix}-default-branch`),
+        builderFor: (identity) => this.#acquireBuilder(config, repository, identity),
       },
+    };
+  }
+
+  /**
+   * One slot's builder (feat-007 plan D6): the deploy-side twin of `#acquireDestroyer`,
+   * for the sweep's pool phase. A fresh session narrowed to the one slot being built for
+   * the backend, the deploy role for the apply, and the definition from the sweep's own
+   * checkout — a scheduled run checks out the default branch, which is exactly the commit
+   * a warm build deploys.
+   */
+  async #acquireBuilder(
+    config: SkyhookConfig,
+    repository: string,
+    identity: string,
+  ): Promise<BuilderAcquisitionOutcome> {
+    const account = config.storage.account;
+    const deploySettings = config.deploy;
+    /* c8 ignore next 3 */
+    if (account === null || deploySettings === null) {
+      return { ok: false, problem: 'configuration is incomplete' };
+    }
+    const region = config.storage.region;
+
+    const backendToken = await requestIdToken(STS_AUDIENCE, this.#tokenOptions());
+    if (!backendToken.ok) return { ok: false, problem: backendToken.problem };
+    const backend = await assumeRoleWithWebIdentity(
+      {
+        region,
+        roleArn: roleArn(account, `${deploySettings.rolePrefix}-default-branch`),
+        roleSessionName: `skyhook-${identity}`.slice(0, 64),
+        webIdentityToken: backendToken.token,
+        policy: sessionPolicyFor({ bucket: config.storage.bucket, repository, identity }),
+      },
+      this.#stsOptions(),
+    );
+    if (!backend.ok) {
+      return { ok: false, problem: `skyhook could not narrow itself to ${identity} (${backend.code})` };
+    }
+
+    const deployToken = await requestIdToken(STS_AUDIENCE, this.#tokenOptions());
+    if (!deployToken.ok) return { ok: false, problem: deployToken.problem };
+    const deployRole = roleArn(account, `${deploySettings.rolePrefix}-deploy`);
+    const deploy = await assumeRoleWithWebIdentity(
+      {
+        region,
+        roleArn: deployRole,
+        roleSessionName: `skyhook-${identity}`.slice(0, 64),
+        webIdentityToken: deployToken.token,
+      },
+      this.#stsOptions(),
+    );
+    if (!deploy.ok) {
+      return {
+        ok: false,
+        problem:
+          `the deploy role ${deployRole} could not be assumed for the warm build (${deploy.code}). ` +
+          "The pool builds from the scheduled sweep, so the role's trust policy must accept the " +
+          'default-branch subject — .skyhook/deploy-role.example.tf shows the two-subject form.',
+      };
+    }
+
+    const store = new S3Store({
+      bucket: config.storage.bucket,
+      region,
+      credentials: credentialsFor(backend.credentials),
+      ...(this.#options.fetch !== undefined ? { fetch: this.#options.fetch } : {}),
+    });
+
+    return {
+      ok: true,
+      deployer: new TerraformEnvironment({
+        runner: this.#options.runner,
+        repositoryRoot: this.#options.repositoryRoot,
+        bucket: config.storage.bucket,
+        region,
+        backendCredentials: credentialsFor(backend.credentials),
+        deployCredentials: credentialsFor(deploy.credentials),
+        store,
+        baseEnv: this.#options.env,
+        ...(this.#options.now !== undefined ? { now: this.#options.now } : {}),
+      }),
     };
   }
 
@@ -407,10 +544,16 @@ export type TeardownAccessOutcome =
   | { readonly ok: true; readonly access: TeardownAccess }
   | { readonly ok: false; readonly problem: string };
 
+export type BuilderAcquisitionOutcome =
+  | { readonly ok: true; readonly deployer: EnvironmentDeployer }
+  | { readonly ok: false; readonly problem: string };
+
 export interface SweepAccess {
   readonly registry: Registry;
   readonly store: Store;
   readonly destroyerFor: (identity: string, target: FetchTarget) => Promise<DestroyerAcquisitionOutcome>;
+  /** The pool phase's builder (feat-007). Narrowed per slot like the destroyer is. */
+  readonly builderFor: (identity: string) => Promise<BuilderAcquisitionOutcome>;
 }
 
 export type SweepAccessOutcome =

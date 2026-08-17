@@ -25,7 +25,7 @@
  * bug here can do is refuse work skyhook is entitled to do.
  */
 
-import { protectionKeyFor, registryKeyFor, stateDirFor } from '../../core/registry.ts';
+import { REGISTRY_PREFIX, protectionKeyFor, registryKeyFor, stateDirFor } from '../../core/registry.ts';
 
 export interface SessionPolicyRequest {
   readonly bucket: string;
@@ -162,6 +162,57 @@ export function sessionPolicyFor(request: SessionPolicyRequest): string {
               NotResource: [...ownObjects, ...readOnlyKeys],
             },
           ]),
+    ],
+  });
+}
+
+export interface ScoutPolicyRequest {
+  readonly bucket: string;
+  readonly repository: string;
+}
+
+/**
+ * The pool-scout session (feat-007 plan D4, chg-009): the first of a pooled deploy's two
+ * sessions, holding exactly what the constitution's fourth named exception grants — read
+ * of this repository's warm-slot records, the conditional claim write on them, and the
+ * listing that finds them. Nothing else: no state prefixes, no protection marks, no
+ * non-slot record bodies, and no delete anywhere, so a destroy stays impossible from
+ * this session however skyhook's code misbehaves (feat-007/AC-11). Once a claim
+ * resolves, the run opens the ordinary narrowed session (`sessionPolicyFor`) for the one
+ * resolved environment, exactly as an unpooled run does.
+ *
+ * The claim write and a record creation are the same physical permission — the cloud
+ * cannot tell a conditional update from a first put on the same key — so minting a slot
+ * record is skyhook's guardrail, priced in the constitution's fourth exception, not a
+ * refusal this document can express.
+ */
+export function scoutPolicyFor(request: ScoutPolicyRequest): string {
+  const bucketArn = `arn:aws:s3:::${request.bucket}`;
+  const slotRecords = `${bucketArn}/${REGISTRY_PREFIX}${request.repository}/slot-*`;
+  return JSON.stringify({
+    Version: '2012-10-17',
+    Statement: [
+      {
+        Sid: 'Slots',
+        Effect: 'Allow',
+        Action: ['s3:GetObject', 's3:PutObject'],
+        Resource: [slotRecords],
+      },
+      {
+        Sid: 'List',
+        Effect: 'Allow',
+        Action: ['s3:ListBucket'],
+        Resource: bucketArn,
+        Condition: { StringLike: { 's3:prefix': [`${REGISTRY_PREFIX}${request.repository}/*`] } },
+      },
+      // Belt and braces, affordable here: this document is nowhere near the character
+      // ceiling, so the deny the deploy variant carries is kept.
+      {
+        Sid: 'NoOthers',
+        Effect: 'Deny',
+        Action: ['s3:GetObject', 's3:PutObject', 's3:DeleteObject'],
+        NotResource: [slotRecords],
+      },
     ],
   });
 }

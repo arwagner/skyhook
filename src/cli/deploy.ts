@@ -78,6 +78,16 @@ function report(result: DeployResult, options: DeployOptions): number {
 
     case 'deployed':
       for (const note of result.notes) options.out(note);
+      if (result.poolPath !== null) {
+        // The path taken is stated on every pooled run (feat-007/AC-7): warm — an
+        // already-provisioned slot; cold — the pool was empty, this was a from-scratch deploy.
+        options.out(
+          result.poolPath === 'warm'
+            ? `Preview path: warm — deployed onto the already-provisioned slot ${result.identity}.`
+            : 'Preview path: cold — no warm slot was claimable, so this was a from-scratch deploy.',
+        );
+        write('pool-path', result.poolPath);
+      }
       options.out(
         `Deployed ${result.identity} at commit ${result.commit}` +
           (result.url === null ? '.' : `: ${result.url}`),

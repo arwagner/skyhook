@@ -35,6 +35,18 @@ locals {
     "${local.bucket_arn}/${local.registry_prefix}/pr-*.json",
     "${local.bucket_arn}/${local.state_prefix}/pr-*/*",
   ]
+
+  # The warm slot pool (feat-007). Slot identities live inside the ephemeral namespace,
+  # and the constitution's FOURTH named exception is what licenses a pull-request run to
+  # touch them: read slot records, and one conditional write — the pool claim.
+  #
+  # The records deliberately get NO DeleteObject anywhere in this policy: freeing a slot's
+  # name is a default-branch act, so a recorded slot is always one the sweep can find and
+  # destroy, whatever a pull request's own code does (feat-007/AC-11). Slot STATE mirrors
+  # pr-* state exactly, delete included — the S3 backend's lockfile is written and deleted
+  # beside the state on every apply, and a claimed slot's re-apply is an apply (chg-001).
+  slot_record_objects = ["${local.bucket_arn}/${local.registry_prefix}/slot-*.json"]
+  slot_state_objects  = ["${local.bucket_arn}/${local.state_prefix}/slot-*/*"]
 }
 
 # ---------------------------------------------------------------------------
@@ -232,7 +244,27 @@ data "aws_iam_policy_document" "pull_request_permissions" {
     sid       = "ReadWriteOwnEphemeralNamespace"
     effect    = "Allow"
     actions   = ["s3:GetObject", "s3:PutObject", "s3:DeleteObject"]
-    resources = local.pull_request_objects
+    resources = concat(local.pull_request_objects, local.slot_state_objects)
+  }
+
+  # feat-007 — the fourth named exception's grant: slot records may be read (finding a
+  # claimable slot, finding one's own by claimant) and conditionally written (the pool
+  # claim). Never deleted: no statement in this document grants DeleteObject on a slot
+  # record, and the explicit deny below does not exempt them from anything wider.
+  statement {
+    sid       = "ReadAndClaimSlotRecords"
+    effect    = "Allow"
+    actions   = ["s3:GetObject", "s3:PutObject"]
+    resources = local.slot_record_objects
+  }
+
+  # Belt and braces for the half of AC-11 the cloud owns: even if a later edit widens an
+  # allow above, a slot record delete stays refused here.
+  statement {
+    sid       = "NeverDeleteASlotRecord"
+    effect    = "Deny"
+    actions   = ["s3:DeleteObject"]
+    resources = local.slot_record_objects
   }
 
   # feat-002/AC-17, and the decision recorded as feat-002 task 0.1. Listing — and ONLY listing —
@@ -256,6 +288,11 @@ data "aws_iam_policy_document" "pull_request_permissions" {
       values = [
         "${local.registry_prefix}/pr-*",
         "${local.state_prefix}/pr-*",
+        "${local.registry_prefix}/slot-*",
+        "${local.state_prefix}/slot-*",
+        # feat-007: same HeadObject-on-missing mechanics for a slot's protection mark as
+        # for pr-* below — the close fast path honors a slot's mark before destroying.
+        "${local.protection_prefix}/slot-*",
         "${local.registry_prefix}/",
         "${local.state_prefix}/",
         # feat-003, the constitution's third exception. Not to list anything: a HeadObject on a
@@ -294,10 +331,15 @@ data "aws_iam_policy_document" "pull_request_permissions" {
   # long-running environment's mark stays unreadable — the deny above spares only GetObject, and
   # this allow names only the pr-* namespace, so everything else still intersects to a refusal.
   statement {
-    sid       = "ReadEphemeralProtectionMarks"
-    effect    = "Allow"
-    actions   = ["s3:GetObject"]
-    resources = ["${local.bucket_arn}/${local.protection_prefix}/pr-*"]
+    sid     = "ReadEphemeralProtectionMarks"
+    effect  = "Allow"
+    actions = ["s3:GetObject"]
+    resources = [
+      "${local.bucket_arn}/${local.protection_prefix}/pr-*",
+      # feat-007: slots are ephemeral too, and their teardown honors a mark the same way.
+      # Reads only — the everything-but-read deny above covers slot marks unchanged.
+      "${local.bucket_arn}/${local.protection_prefix}/slot-*",
+    ]
   }
 
 
@@ -322,7 +364,15 @@ data "aws_iam_policy_document" "pull_request_permissions" {
     not_resources = concat(
       [local.bucket_arn, local.default_workspace_state],
       local.pull_request_objects,
-      ["${local.bucket_arn}/${local.protection_prefix}/pr-*"],
+      # feat-007: the slot namespace is inside the ephemeral fence. Exempting it from
+      # this deny grants nothing by itself — the allows above still decide, and slot
+      # record deletes have their own explicit deny.
+      local.slot_record_objects,
+      local.slot_state_objects,
+      [
+        "${local.bucket_arn}/${local.protection_prefix}/pr-*",
+        "${local.bucket_arn}/${local.protection_prefix}/slot-*",
+      ],
     )
   }
 }

@@ -958,6 +958,7 @@ function brokerFixture(): {
     environmentCap: { enabled: true, limit: 5 },
     storage: { bucket: 'skyhook-acme', region: 'us-east-1', account: '123456789012' },
     deploy: { directory: 'infrastructure', rolePrefix: 'skyhook', inputs: [] },
+    pool: null,
   };
   return { broker, config, stsBodies };
 }

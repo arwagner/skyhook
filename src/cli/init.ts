@@ -162,6 +162,17 @@ environment_cap:
   # silently-defaulted cap is the difference between 5 environments and 50.
   enabled: ${DEFAULT_ENVIRONMENT_CAP.enabled}
   limit: ${DEFAULT_ENVIRONMENT_CAP.limit}
+
+# OPTIONAL: the warm slot pool. The scheduled sweep keeps this many already-provisioned
+# environments standing ready; a pull request claims one and applies only its own changes,
+# so its preview URL arrives in the time your delta takes, not a full from-scratch build.
+# Costs to know before turning it on: every warm slot is a standing environment you pay
+# for, warm slots count against environment_cap.limit, and pooling needs the deploy block
+# above. If your Terraform declares deploy inputs, the SWEEP workflow must set TF_VAR_<name>
+# for each too — a warm build carries the same inputs a deploy does (see the sweep job's
+# comments in .github/workflows). Absent or 0 = no pool.
+#pool:
+#  target: 1
 `;
 }
 
@@ -232,6 +243,15 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
+      # POOLING AND DEPLOY INPUTS (only relevant if you set pool.target or deploy.inputs in
+      # .skyhook/config.yml): every declared input must reach skyhook as TF_VAR_<name> — on
+      # deploys AND on the scheduled runs of this same job, because the sweep's warm builds
+      # deploy your default branch with the same inputs a deploy carries. Compute or fetch
+      # each value in a step above skyhook's, then export it, e.g.:
+      #   env:
+      #     TF_VAR_image_tag: \${{ steps.build.outputs.tag }}
+      # A scheduled run that is missing one refuses the warm build loudly and builds nothing.
 
       - id: skyhook
         # Pin this to a tag once skyhook publishes one. \`@main\` means you run whatever is on

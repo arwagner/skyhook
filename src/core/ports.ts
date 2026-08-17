@@ -106,8 +106,28 @@ export type AccessOutcome =
       readonly problem: string;
     };
 
+/**
+ * The pool-scout session (feat-007 plan D4): a registry confined to the repository's
+ * warm-slot records — read, and the conditional claim write — and nothing else. The
+ * first of a pooled run's two sessions; the ordinary narrowed session follows once the
+ * claim resolves. Never opened when pooling is off.
+ */
+export type ScoutOutcome =
+  | { readonly ok: true; readonly registry: Registry }
+  | { readonly ok: false; readonly problem: string };
+
+export interface ScoutRequest {
+  readonly config: SkyhookConfig;
+  readonly repository: string;
+}
+
 export interface AccessBroker {
   open(request: AccessRequest): Promise<AccessOutcome>;
+  /**
+   * Optional so brokers predating pooling keep compiling; a pooled deploy without one
+   * fails closed and loudly rather than quietly deploying cold (feat-007/AC-1's inverse).
+   */
+  openScout?(request: ScoutRequest): Promise<ScoutOutcome>;
 }
 
 // --- deploying one environment ----------------------------------------------

@@ -25,7 +25,9 @@ readiness:                   # per-artifact progress vector
                              #   clarification markers; reviewer's fixes folded in
   plan:     ready            # none | draft | ready — plan + tasks written 2026-08-17; one
                              #   build with chg-012/chg-009 and a drafted feat-005 chg-002
-  tasks:    none             # none | draft | ready
+  tasks:    draft            # none | draft | ready — phases 1-7 built and verified
+                             #   2026-08-17 (435 tests green); 8.1 [H] live check and 8.2
+                             #   fold outstanding
 gate:
   analyze: pass              # 2026-08-17: first pass fix-then-implement (B1 hard: honest
                              #   cloud/guardrail split in AC-11/D8; B2: retry bound), all

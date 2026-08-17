@@ -14,6 +14,7 @@ import { sweepEnvironments, type SweepEntry, type SweepResult } from '../core/sw
 import { GitHubConfigSource } from '../adapters/github/config-source.ts';
 import { GitHubPullRequests } from '../adapters/github/pull-requests.ts';
 import { AwsAccessBroker } from '../adapters/aws/broker.ts';
+import { terraformInputSource } from '../adapters/terraform/inputs.ts';
 import type { CommandRunner } from './process.ts';
 
 /** Every failure was the consuming repo's own destroy. Distinct from skyhook failing (plan D8). */
@@ -68,12 +69,41 @@ export async function sweep(options: SweepOptions): Promise<number> {
     options.err(`skyhook sweep: ${opened.problem}`);
     return 1;
   }
-  const { registry, store, destroyerFor } = opened.access;
+  const { registry, store, destroyerFor, builderFor } = opened.access;
+
+  // The pool phase (feat-007): present exactly when pooling is on. The warm build
+  // deploys the default branch's current commit — the scheduled run's own checkout —
+  // with the declared input values the workflow's environment carries (od-1).
+  const pool = loaded.config.pool;
+  const deploySettings = loaded.config.deploy;
+  const headCommit = options.env['GITHUB_SHA'] ?? '';
+  if (pool !== null && (deploySettings === null || headCommit === '')) {
+    options.err(
+      'skyhook sweep: pool.target is set, but ' +
+        (deploySettings === null
+          ? 'the deploy block is missing — a warm build needs deploy.directory.'
+          : 'GITHUB_SHA is not set — a warm build records the default-branch commit it deploys.'),
+    );
+    return 1;
+  }
 
   const result = await sweepEnvironments(
     {
       registry,
       store,
+      ...(pool !== null && deploySettings !== null
+        ? {
+            pool: {
+              target: pool.target,
+              cap: loaded.config.environmentCap,
+              headCommit,
+              directory: deploySettings.directory,
+              declaredInputs: deploySettings.inputs,
+              inputSource: terraformInputSource(options.env),
+              deployerFor: (identity) => builderFor(identity),
+            },
+          }
+        : {}),
       pullRequests: new GitHubPullRequests({
         repository,
         token,
@@ -143,6 +173,12 @@ function line(entry: SweepEntry): string {
       return `${entry.identity}: left standing — its pull request is open`;
     case 'not-ephemeral':
       return `${entry.identity}: not ephemeral, not the sweep's to touch`;
+    case 'warm-ready':
+      return `${entry.identity}: warm and claimable, standing ready`;
+    case 'pool-built':
+      return `${entry.identity}: built warm, now claimable`;
+    case 'pool-at-cap':
+      return 'pool: under target, but the environment cap leaves no headroom — nothing was built';
     case 'failed':
       return `${entry.identity}: FAILED — ${entry.problem ?? 'unknown'}`;
   }

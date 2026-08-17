@@ -125,6 +125,7 @@ test('feat-006/AC-9 gap-002: protect and unprotect reach applied through fakes, 
       registry,
       store,
       destroyerFor: async () => ({ ok: false, problem: 'protection never needs a destroyer' }),
+      builderFor: async () => ({ ok: false, problem: 'protection never needs a builder' }),
     },
   });
   const common = { runner: silentRunner, fetch: configFetch, openManualAccess: open };
@@ -159,6 +160,7 @@ test('feat-006/AC-12 chg-002 gap-003: a human marks and unmarks a pull-request p
       registry,
       store,
       destroyerFor: async () => ({ ok: false, problem: 'protection never needs a destroyer' }),
+      builderFor: async () => ({ ok: false, problem: 'protection never needs a builder' }),
     },
   });
   const common = { runner: silentRunner, fetch: configFetch, openManualAccess: open };

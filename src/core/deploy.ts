@@ -15,7 +15,7 @@
 
 import { identityFor } from './identity.ts';
 import { loadConfig, type ConfigSource } from './config.ts';
-import { deployInputValueProblem } from './registry.ts';
+import { deployInputValueProblem, isClaimable } from './registry.ts';
 import type { AccessBroker, DeployOutputs, EnvironmentDeployer, TriggerSource } from './ports.ts';
 import type { Registry } from './registry.ts';
 import type { SkyhookConfig } from './types.ts';
@@ -48,10 +48,18 @@ export interface DeployPorts {
   readonly inputSource?: DeclaredInputSource;
 }
 
+/**
+ * Which path a pooled deploy took (feat-007/AC-7): `warm` — an already-provisioned slot
+ * was claimed or refreshed; `cold` — no slot was claimable, so the run fell back to the
+ * from-scratch path. Null exactly when pooling is off or the run is not a pull request's.
+ */
+export type PoolPath = 'warm' | 'cold' | null;
+
 export type DeployResult =
   | {
       readonly kind: 'deployed';
       readonly identity: string;
+      readonly poolPath: PoolPath;
       readonly commit: string;
       readonly url: string | null;
       /** Every output the definition declares, for the calling workflow (AC-24). */
@@ -72,6 +80,7 @@ export type DeployResult =
   | {
       readonly kind: 'consumer-failed';
       readonly identity: string;
+      readonly poolPath: PoolPath;
       readonly message: string;
       readonly skyhookMs: number;
     };
@@ -140,21 +149,59 @@ export async function deployEnvironment(ports: DeployPorts): Promise<DeployResul
   const inputs = readDeclaredInputs(deploySettings.inputs, ports.inputSource);
   if (!inputs.ok) return { kind: 'failed', message: inputs.problem };
 
+  // The pool (feat-007, chg-009 AC-27): after the input refusals, before any narrowing —
+  // which environment to narrow to is exactly what the scout finds out. The trigger's
+  // derived identity stays the run's claimant identity; the environment identity may be a
+  // slot's, fixed when the slot was built.
+  let environmentIdentity = identity;
+  let poolPath: PoolPath = null;
+  if (loaded.config.pool !== null && context.kind === 'pull-request') {
+    if (ports.broker.openScout === undefined) {
+      return {
+        kind: 'failed',
+        message:
+          'pool.target is set, but this deploy path cannot open the pool-scout session. ' +
+          'Nothing was claimed and nothing was applied — disable pooling or use a ' +
+          'scout-capable build of skyhook.',
+      };
+    }
+    const scout = await ports.broker.openScout({ config: loaded.config, repository });
+    if (!scout.ok) return { kind: 'failed', message: scout.problem };
+    const resolved = await resolveWarmSlot(
+      scout.registry,
+      repository,
+      context.pullRequestNumber,
+    );
+    if (!resolved.ok) return { kind: 'failed', message: resolved.problem };
+    if (resolved.identity !== null) {
+      environmentIdentity = resolved.identity;
+      poolPath = 'warm';
+    } else {
+      poolPath = 'cold';
+    }
+  }
+
   const access = await ports.broker.open({
     config: loaded.config,
     repository,
-    identity,
+    identity: environmentIdentity,
     triggerKind: context.kind,
   });
   if (!access.ok) return { kind: 'failed', message: access.problem };
   const { registry, deployer } = access.grant;
 
-  const claimed = await claimOrRefresh(registry, loaded.config, repository, identity, context.kind);
+  const claimed = await claimOrRefresh(
+    registry,
+    loaded.config,
+    repository,
+    environmentIdentity,
+    context.kind,
+  );
   if (!claimed.ok) return { kind: 'failed', message: claimed.problem };
 
   const applied = await deployer.deploy({
     repository,
-    identity,
+    identity: environmentIdentity,
     directory: deploySettings.directory,
   });
 
@@ -176,7 +223,8 @@ export async function deployEnvironment(ports: DeployPorts): Promise<DeployResul
       // environment whose last deploy did not land.
       return {
         kind: 'consumer-failed',
-        identity,
+        identity: environmentIdentity,
+        poolPath,
         message: applied.problem,
         skyhookMs: elapsed(),
       };
@@ -185,19 +233,19 @@ export async function deployEnvironment(ports: DeployPorts): Promise<DeployResul
   }
 
   // Only now. The commit moves after a successful apply and never before it.
-  const recorded = await registry.read(repository, identity);
+  const recorded = await registry.read(repository, environmentIdentity);
   if (!recorded.ok || recorded.record === null) {
     return {
       kind: 'failed',
       message:
-        `deployed ${identity}, but its record could not be updated afterwards ` +
+        `deployed ${environmentIdentity}, but its record could not be updated afterwards ` +
         `(${recorded.ok ? 'the record is gone' : recorded.reason}). The infrastructure exists ` +
         'and the registry does not describe it — re-run before anything else.',
     };
   }
   // The values move exactly when the commit does, as a wholesale replace (AC-23): the
   // record always names the commit and the artifacts of the last deploy that landed.
-  const updated = await registry.update(repository, identity, recorded.version, {
+  const updated = await registry.update(repository, environmentIdentity, recorded.version, {
     deployedCommit: headCommit,
     url: applied.url,
     deployInputs: Object.keys(inputs.values).length > 0 ? inputs.values : null,
@@ -206,7 +254,7 @@ export async function deployEnvironment(ports: DeployPorts): Promise<DeployResul
     return {
       kind: 'failed',
       message:
-        `deployed ${identity}, but recording the result was refused (${updated.reason}). ` +
+        `deployed ${environmentIdentity}, but recording the result was refused (${updated.reason}). ` +
         'The infrastructure exists and the registry still names the previous commit.',
     };
   }
@@ -221,7 +269,8 @@ export async function deployEnvironment(ports: DeployPorts): Promise<DeployResul
 
   return {
     kind: 'deployed',
-    identity,
+    identity: environmentIdentity,
+    poolPath,
     commit: headCommit,
     url: applied.url,
     outputs: applied.outputs,
@@ -260,8 +309,11 @@ type DeclaredInputsResult =
  * every offender at once — a maintainer wiring this up for the first time would
  * otherwise fix one, re-run, and be told about the next (the `missingDeploySettings`
  * rationale). A repository that declares none deploys exactly as before (AC-22).
+ *
+ * Exported for the sweep's pool phase (feat-007): a warm build carries the same declared
+ * inputs under the same refuse-before-record rule, and two readers of one rule drift.
  */
-function readDeclaredInputs(
+export function readDeclaredInputs(
   names: readonly string[],
   source: DeployPorts['inputSource'],
 ): DeclaredInputsResult {
@@ -291,6 +343,56 @@ function readDeclaredInputs(
     };
   }
   return { ok: true, values };
+}
+
+/** One try plus at most two same-slot retries (the spec's race scenario, feat-007). */
+const POOL_CLAIM_ATTEMPTS = 3;
+
+type WarmResolution =
+  /** `identity` is the slot to deploy onto, or null when the pool is empty (go cold). */
+  | { readonly ok: true; readonly identity: string | null }
+  | { readonly ok: false; readonly problem: string };
+
+/**
+ * Find this pull request's slot, or take a free one (feat-007/AC-5, AC-13).
+ *
+ * A slot already claimed by this pull request wins outright — a push refresh must come
+ * back to it and never claim a second. Otherwise claimable slots are walked in slot-number
+ * order: a genuine loss moves on at once; an inconclusive collision retries the same slot,
+ * bounded, with a fresh read each time. Exhausting the pool is not a failure — the caller
+ * falls back to the from-scratch path (AC-7).
+ */
+async function resolveWarmSlot(
+  scout: Registry,
+  repository: string,
+  claimant: number,
+): Promise<WarmResolution> {
+  const held = await scout.findSlotByClaimant(repository, claimant);
+  if (!held.ok) return { ok: false, problem: `the pool could not be read: ${held.reason}` };
+  if (held.slot !== null) return { ok: true, identity: held.slot.identity };
+
+  const listed = await scout.listSlots(repository);
+  if (!listed.ok) return { ok: false, problem: `the pool could not be read: ${listed.reason}` };
+  for (const slot of listed.slots) {
+    if (!isClaimable(slot.record)) continue;
+    let version = slot.version;
+    for (let attempt = 0; attempt < POOL_CLAIM_ATTEMPTS; attempt += 1) {
+      const outcome = await scout.poolClaim(repository, slot.identity, claimant, version);
+      if (outcome.ok) return { ok: true, identity: slot.identity };
+      // A genuine loss, or a slot that stopped being claimable: the next slot's turn.
+      if (outcome.reason === 'lost' || outcome.reason === 'not-claimable') break;
+      if (outcome.reason === 'contended') {
+        // Nothing is known — re-read for a fresh version and try this slot again.
+        const fresh = await scout.read(repository, slot.identity);
+        if (!fresh.ok) return { ok: false, problem: `the pool could not be read: ${fresh.reason}` };
+        if (fresh.record === null || !isClaimable(fresh.record)) break;
+        version = fresh.version;
+        continue;
+      }
+      return { ok: false, problem: `the pool claim was refused: ${outcome.reason}` };
+    }
+  }
+  return { ok: true, identity: null };
 }
 
 type ClaimResult = { readonly ok: true } | { readonly ok: false; readonly problem: string };

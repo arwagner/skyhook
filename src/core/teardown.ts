@@ -89,14 +89,15 @@ export async function teardownEnvironment(
   }
   if (initial.record === null) return { kind: 'nothing' };
 
-  // Protection, before anything changes — and only for an `active` record. The mark is
-  // honored before release, never after: a `released` record is a started teardown, and
-  // completing one is never blocked by a mark, however a stray mark came to sit on it
-  // (feat-006/AC-7; gap-001 was a protect racing a release into exactly that state and
-  // wedging the sweep). An error here is not "unprotected": the fast path's credentials
-  // are refused the read entirely, and treating a refusal as absence would destroy
-  // exactly what the marker exists to keep (plan D3's fail-closed fallback).
-  if (initial.record.state === 'active') {
+  // Protection, before anything changes — for any record that is not already `released`.
+  // The mark is honored before release, never after: a `released` record is a started
+  // teardown, and completing one is never blocked by a mark, however a stray mark came to
+  // sit on it (feat-006/AC-7; gap-001 was a protect racing a release into exactly that
+  // state and wedging the sweep). A `warm` slot honors the mark the same way — every slot
+  // destroy does (feat-007/AC-10). An error here is not "unprotected": the fast path's
+  // credentials are refused the read entirely, and treating a refusal as absence would
+  // destroy exactly what the marker exists to keep (plan D3's fail-closed fallback).
+  if (initial.record.state !== 'released') {
     let isProtected: boolean;
     try {
       const protection = await registry.isProtected(repository, identity);
@@ -116,9 +117,11 @@ export async function teardownEnvironment(
     if (isProtected) return { kind: 'left-standing-protected' };
   }
 
-  // Release: from here, claims on the name are refused as awaiting teardown. A CAS loss
+  // Release: from here, claims on the name are refused as awaiting teardown — and for a
+  // warm slot this version-bumping write is also what makes a racing pool claim lose at
+  // the record instead of racing invisible cloud calls (feat-007/AC-10). A CAS loss
   // is not a failure — re-read to see who moved it and what that means.
-  if (initial.record.state === 'active') {
+  if (initial.record.state !== 'released') {
     const released = await registry.release(repository, identity, initial.version);
     if (!released.ok) {
       if (released.reason === 'not-found') return { kind: 'nothing' };

@@ -10,6 +10,7 @@
 
 import type { EnvironmentRecord, EnvironmentState } from './types.ts';
 import type { Store, VersionToken } from './store.ts';
+import { slotNumberFor } from './identity.ts';
 
 const REPOSITORY_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]*\/[A-Za-z0-9][A-Za-z0-9._-]*$/;
 const IDENTITY_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
@@ -116,7 +117,7 @@ function deserialize(json: string): EnvironmentRecord | null {
   const { repository, identity, state, deployedCommit, createdAt, updatedAt } = candidate;
   if (typeof repository !== 'string' || repository === '') return null;
   if (typeof identity !== 'string' || identity === '') return null;
-  if (state !== 'active' && state !== 'released') return null;
+  if (state !== 'warm' && state !== 'active' && state !== 'released') return null;
   if (deployedCommit !== null && typeof deployedCommit !== 'string') return null;
   if (typeof createdAt !== 'string' || typeof updatedAt !== 'string') return null;
   // Absent means null, not invalid: records written before the field existed must still
@@ -126,7 +127,25 @@ function deserialize(json: string): EnvironmentRecord | null {
   const rawUrl = candidate['url'];
   const url = typeof rawUrl === 'string' && rawUrl !== '' ? rawUrl : null;
   const deployInputs = readDeployInputs(candidate['deployInputs']);
-  return { repository, identity, state, deployedCommit, url, deployInputs, createdAt, updatedAt };
+  // Absent means no claimant, like `url` (chg-012, AC-39). Anything not a positive
+  // integer is discarded rather than refused — an unusable claimant is the same as none,
+  // and refusing the record would hide an environment that still needs tearing down.
+  const rawClaimant = candidate['claimant'];
+  const claimant =
+    typeof rawClaimant === 'number' && Number.isInteger(rawClaimant) && rawClaimant >= 1
+      ? rawClaimant
+      : null;
+  return {
+    repository,
+    identity,
+    state,
+    deployedCommit,
+    url,
+    deployInputs,
+    claimant,
+    createdAt,
+    updatedAt,
+  };
 }
 
 /**
@@ -151,6 +170,12 @@ export interface ClaimRequest {
   readonly repository: string;
   readonly identity: string;
   readonly deployedCommit?: string | null;
+  /**
+   * The pool builder fresh-claims its slots `warm` (feat-007); everything else claims
+   * `active`, exactly as before. Never `released` — a fresh claim of a name nobody may
+   * use would be a contradiction in terms.
+   */
+  readonly state?: 'active' | 'warm';
 }
 
 export type ClaimOutcome =
@@ -162,11 +187,57 @@ export type ClaimOutcome =
         | 'held'
         /** A record exists and is `released`: the infrastructure is still standing. */
         | 'awaiting-teardown'
+        /** A record exists and is `warm`: the name belongs to the pool (chg-012, AC-16). */
+        | 'pool-reserved'
         | 'container-missing'
         | 'corrupt-record'
         /** The record kept appearing and vanishing under us. Retry the run. */
         | 'contended';
     };
+
+export type PoolClaimOutcome =
+  | { readonly ok: true; readonly record: EnvironmentRecord; readonly version: VersionToken }
+  | {
+      readonly ok: false;
+      readonly reason:
+        /**
+         * The record is not a claimable warm slot — commitless (a build in progress or
+         * wreckage), or not `warm` at all. Enforced here, not by caller discipline
+         * (chg-012, AC-38). Nothing was written.
+         */
+        | 'not-claimable'
+        /** The record moved since it was read: a genuine loss. Move to the next slot. */
+        | 'lost'
+        /** Inconclusive collision — nothing is known. Retry the same slot (AC-38). */
+        | 'contended'
+        | 'container-missing'
+        | 'corrupt-record';
+    };
+
+/** One slot as the registry sees it, keyed by its number for ordering. */
+export interface SlotEntry {
+  readonly identity: string;
+  readonly slotNumber: number;
+  readonly record: EnvironmentRecord;
+  readonly version: VersionToken;
+}
+
+export type ListSlotsOutcome =
+  | { readonly ok: true; readonly slots: readonly SlotEntry[] }
+  | { readonly ok: false; readonly reason: 'container-missing' | 'corrupt-record' };
+
+export type FindSlotOutcome =
+  | { readonly ok: true; readonly slot: SlotEntry | null }
+  | { readonly ok: false; readonly reason: 'container-missing' | 'corrupt-record' };
+
+/**
+ * A warm slot a pull request may take: built (the record carries its build's commit),
+ * belonging to nobody. The one definition of claimability — callers never re-derive it
+ * (feat-001/AC-39), and `poolClaim` re-checks it at the registry layer.
+ */
+export function isClaimable(record: EnvironmentRecord): boolean {
+  return record.state === 'warm' && record.deployedCommit !== null;
+}
 
 export type ReadRecordOutcome =
   | { readonly ok: true; readonly record: EnvironmentRecord; readonly version: VersionToken }
@@ -269,12 +340,13 @@ export class Registry {
       const record: EnvironmentRecord = {
         repository,
         identity,
-        state: 'active',
+        state: request.state ?? 'active',
         deployedCommit: request.deployedCommit ?? null,
         // A claim precedes the infrastructure, so there is no address yet by construction —
         // and no recorded inputs, since those follow a landed apply the same way the commit does.
         url: null,
         deployInputs: null,
+        claimant: null,
         createdAt: timestamp,
         updatedAt: timestamp,
       };
@@ -292,7 +364,12 @@ export class Registry {
       if (existing.record === null) continue; // torn down between the two calls; try again
       return {
         ok: false,
-        reason: existing.record.state === 'active' ? 'held' : 'awaiting-teardown',
+        reason:
+          existing.record.state === 'active'
+            ? 'held'
+            : existing.record.state === 'warm'
+              ? 'pool-reserved'
+              : 'awaiting-teardown',
       };
     }
     return { ok: false, reason: 'contended' };
@@ -305,6 +382,85 @@ export class Registry {
     const record = deserialize(outcome.object.value);
     if (record === null) return { ok: false, reason: 'corrupt-record' };
     return { ok: true, record, version: outcome.object.version };
+  }
+
+  /**
+   * The pool claim (chg-012, AC-38): one conditional transition of a warm slot's record
+   * from `warm` to `active`, recording the claimant — or an observable failure that
+   * distinguishes a genuine loss (move to the next slot) from an inconclusive collision
+   * (retry this one). Claimability is enforced here, not by caller discipline: a
+   * commitless record — a build in progress, or wreckage — is refused whatever the
+   * caller believed.
+   */
+  async poolClaim(
+    repository: string,
+    identity: string,
+    claimant: number,
+    expectedVersion: VersionToken,
+  ): Promise<PoolClaimOutcome> {
+    const current = await this.read(repository, identity);
+    if (!current.ok) return { ok: false, reason: current.reason };
+    // Gone, or moved since the caller read it: either way the slot the caller saw no
+    // longer exists at that version. A genuine loss, not an unknown.
+    if (current.record === null || current.version !== expectedVersion) {
+      return { ok: false, reason: 'lost' };
+    }
+    if (!isClaimable(current.record)) return { ok: false, reason: 'not-claimable' };
+
+    const next: EnvironmentRecord = {
+      ...current.record,
+      state: 'active',
+      claimant,
+      updatedAt: this.#now(),
+    };
+    const swapped = await this.#store.compareAndSwap(
+      registryKeyFor(repository, identity),
+      serialize(next),
+      expectedVersion,
+    );
+    if (!swapped.ok) {
+      if (swapped.reason === 'container-missing') return { ok: false, reason: 'container-missing' };
+      if (swapped.reason === 'contended') return { ok: false, reason: 'contended' };
+      return { ok: false, reason: 'lost' };
+    }
+    return { ok: true, record: next, version: swapped.version };
+  }
+
+  /**
+   * Every warm-slot record this repository holds, ordered by slot number — the order
+   * claims walk (feat-007, "the lowest-numbered claimable slot"). Identities come from
+   * the registry keys; the record bodies say only what each slot is.
+   */
+  async listSlots(repository: string): Promise<ListSlotsOutcome> {
+    const listed = await this.#store.list(registryPrefixFor(repository));
+    if (!listed.ok) return { ok: false, reason: 'container-missing' };
+    const slots: SlotEntry[] = [];
+    for (const key of listed.keys) {
+      const identity = identityFromRegistryKey(repository, key);
+      if (identity === null) continue;
+      const slotNumber = slotNumberFor(identity);
+      if (slotNumber === null) continue;
+      const read = await this.read(repository, identity);
+      if (!read.ok) return { ok: false, reason: read.reason };
+      if (read.record === null) continue; // deleted between the list and the read
+      slots.push({ identity, slotNumber, record: read.record, version: read.version });
+    }
+    slots.sort((a, b) => a.slotNumber - b.slotNumber);
+    return { ok: true, slots };
+  }
+
+  /**
+   * The one slot this pull request holds, or null. How a push refresh and the close fast
+   * path find their environment on a pooled repository (feat-007/AC-13): the identity no
+   * longer says it, the claimant does.
+   */
+  async findSlotByClaimant(repository: string, claimant: number): Promise<FindSlotOutcome> {
+    const listed = await this.listSlots(repository);
+    if (!listed.ok) return { ok: false, reason: listed.reason };
+    const slot = listed.slots.find(
+      (s) => s.record.state === 'active' && s.record.claimant === claimant,
+    );
+    return { ok: true, slot: slot ?? null };
   }
 
   /**

@@ -759,3 +759,279 @@ test('feat-002/AC-24 the deploy result carries the outputs document through unto
   });
   assert.deepEqual(result.outputs?.omittedSensitive, ['db_password']);
 });
+
+// --- the warm slot pool (feat-007) -------------------------------------------
+
+const POOLED_CONFIG = `${CONFIG}
+pool:
+  target: 2
+`;
+
+/** A claimable warm slot, seeded the way the sweep's builder leaves one. */
+async function seedWarmSlot(registry: Registry, identity: string): Promise<void> {
+  const claimed = await registry.claim({ repository: REPO, identity, state: 'warm' });
+  assert.ok(claimed.ok);
+  if (!claimed.ok) throw new Error('unreachable');
+  const updated = await registry.update(REPO, identity, claimed.version, {
+    deployedCommit: 'warm-build-commit',
+    url: `https://${identity}.example.test`,
+  });
+  assert.ok(updated.ok);
+}
+
+function pooledHarness(options: { store?: FakeStore; deployer?: FakeDeployer; ctx?: TriggerContext } = {}): Harness & {
+  opened: string[];
+  scouted: () => number;
+} {
+  const store = options.store ?? new FakeStore();
+  const registry = new Registry(store, { now: fixedClock() });
+  const deployer = options.deployer ?? new FakeDeployer();
+  const opened: string[] = [];
+  let scouts = 0;
+  const ports: DeployPorts = {
+    trigger: fakeTrigger({ ok: true, context: options.ctx ?? context() }),
+    configSource: fakeConfigSource(POOLED_CONFIG),
+    broker: fakeBroker(registry, deployer, {
+      scout: registry,
+      onOpen: (request) => opened.push(request.identity),
+      onScout: () => {
+        scouts += 1;
+      },
+    }),
+    now: tickingClock(0),
+  };
+  return { ports, store, registry, deployer, opened, scouted: () => scouts };
+}
+
+test('feat-002/AC-27 a pooled deploy claims the lowest slot, then narrows to it, then applies', async () => {
+  const { ports, registry, deployer, opened } = pooledHarness();
+  await seedWarmSlot(ports === undefined ? registry : registry, 'slot-2');
+  await seedWarmSlot(registry, 'slot-1');
+
+  const result = await deployEnvironment(ports);
+
+  assert.equal(result.kind, 'deployed');
+  if (result.kind !== 'deployed') return;
+  assert.equal(result.identity, 'slot-1', 'the lowest-numbered claimable slot wins');
+  assert.equal(result.poolPath, 'warm');
+  // The narrowing names the resolved slot — never the derived pr identity (chg-009).
+  assert.deepEqual(opened, ['slot-1']);
+  assert.equal(deployer.requests[0]?.identity, 'slot-1');
+
+  // feat-007/AC-6: the record shows the PR's commit, the re-read URL, and the claimant;
+  // the identity is the one fixed at build time.
+  const read = await registry.read(REPO, 'slot-1');
+  assert.ok(read.ok && read.record !== null);
+  if (read.ok && read.record !== null) {
+    assert.equal(read.record.state, 'active');
+    assert.equal(read.record.claimant, 482);
+    assert.equal(read.record.deployedCommit, HEAD);
+    assert.equal(read.record.url, 'https://example.test');
+  }
+  // No environment was created under the derived identity.
+  const derived = await registry.read(REPO, 'pr-482');
+  assert.ok(derived.ok && derived.record === null, 'no pr-482 record exists');
+});
+
+test('feat-007/AC-13 a push to a pull request that already holds a slot refreshes it', async () => {
+  const { ports, registry, deployer, opened } = pooledHarness();
+  await seedWarmSlot(registry, 'slot-1');
+  await seedWarmSlot(registry, 'slot-2');
+  // First deploy claims slot-1; the second push must come back to it.
+  const first = await deployEnvironment(ports);
+  assert.equal(first.kind, 'deployed');
+  const second = await deployEnvironment(ports);
+  assert.equal(second.kind, 'deployed');
+  if (second.kind !== 'deployed') return;
+  assert.equal(second.identity, 'slot-1');
+  assert.equal(second.poolPath, 'warm');
+  assert.deepEqual(opened, ['slot-1', 'slot-1']);
+  assert.equal(deployer.requests.length, 2);
+  // At no point do two environments exist for one pull request: slot-2 stays warm,
+  // and no pr-482 record was ever created.
+  const slot2 = await registry.read(REPO, 'slot-2');
+  assert.ok(slot2.ok && slot2.record?.state === 'warm');
+  const derived = await registry.read(REPO, 'pr-482');
+  assert.ok(derived.ok && derived.record === null);
+});
+
+test('feat-007/AC-7 an empty pool falls back to a from-scratch deploy in the same run', async () => {
+  const { ports, registry, opened } = pooledHarness();
+  // One slot exists but is mid-build: commitless, so not claimable.
+  const building = await registry.claim({ repository: REPO, identity: 'slot-1', state: 'warm' });
+  assert.ok(building.ok);
+
+  const result = await deployEnvironment(ports);
+
+  assert.equal(result.kind, 'deployed');
+  if (result.kind !== 'deployed') return;
+  assert.equal(result.identity, 'pr-482');
+  assert.equal(result.poolPath, 'cold');
+  assert.deepEqual(opened, ['pr-482']);
+  const derived = await registry.read(REPO, 'pr-482');
+  assert.ok(derived.ok && derived.record?.state === 'active');
+});
+
+test('feat-007/AC-7 the cold fallback is capped exactly as today', async () => {
+  const store = new FakeStore();
+  const registry = new Registry(store, { now: fixedClock() });
+  // Cap of 2, both taken: one standing long-running environment and one warm slot
+  // (warm slots count against the cap by decision, od-3).
+  await registry.claim({ repository: REPO, identity: 'staging' });
+  await registry.claim({ repository: REPO, identity: 'slot-1', state: 'warm' });
+  const deployer = new FakeDeployer();
+  const ports: DeployPorts = {
+    trigger: fakeTrigger({ ok: true, context: context() }),
+    configSource: fakeConfigSource(
+      `${POOLED_CONFIG}environment_cap:\n  enabled: true\n  limit: 2\n`,
+    ),
+    broker: fakeBroker(registry, deployer, { scout: registry }),
+    now: tickingClock(0),
+  };
+
+  const result = await deployEnvironment(ports);
+
+  assert.equal(result.kind, 'failed');
+  if (result.kind === 'failed') {
+    assert.ok(result.message.includes('cap'), result.message);
+  }
+  assert.equal(deployer.called, false, 'nothing was applied');
+});
+
+test('feat-007/AC-14 a claim that wins and an apply that fails leave the slot held, loudly', async () => {
+  const deployer = new FakeDeployer({
+    outcome: {
+      ok: false,
+      reason: 'consumer-apply-failed',
+      problem: 'terraform apply exited 1',
+      timing: { preparationMs: 0, initMs: 0, applyMs: 0 },
+    },
+  });
+  const { ports, registry } = pooledHarness({ deployer });
+  await seedWarmSlot(registry, 'slot-1');
+
+  const result = await deployEnvironment(ports);
+
+  assert.equal(result.kind, 'consumer-failed');
+  if (result.kind !== 'consumer-failed') return;
+  assert.equal(result.identity, 'slot-1');
+  assert.equal(result.poolPath, 'warm');
+  const read = await registry.read(REPO, 'slot-1');
+  assert.ok(read.ok && read.record !== null);
+  if (read.ok && read.record !== null) {
+    assert.equal(read.record.state, 'active');
+    assert.equal(read.record.claimant, 482);
+    // The build-time commit stands — the failed apply moved nothing.
+    assert.equal(read.record.deployedCommit, 'warm-build-commit');
+  }
+});
+
+test('feat-007/AC-5 a lost race moves to the next claimable slot', async () => {
+  // Another pull request takes slot-1 between this run's read and its claim write. The
+  // sabotage happens inside the store's commit gate, so the loss is a genuine CAS loss.
+  let armed = false;
+  const store: FakeStore = new FakeStore({
+    beforeCommit: async (key) => {
+      if (!armed || !key.endsWith('/slot-1.json')) return;
+      armed = false;
+      const raw = store.rawValue(key);
+      if (raw !== undefined) {
+        const record = JSON.parse(raw) as { state: string; claimant: number | null };
+        record.state = 'active';
+        record.claimant = 999;
+        store.seed(key, JSON.stringify(record));
+      }
+    },
+  });
+  const { ports, registry } = pooledHarness({ store });
+  await seedWarmSlot(registry, 'slot-1');
+  await seedWarmSlot(registry, 'slot-2');
+  armed = true;
+
+  const result = await deployEnvironment(ports);
+
+  assert.equal(result.kind, 'deployed');
+  if (result.kind !== 'deployed') return;
+  assert.equal(result.identity, 'slot-2', 'the loser moved on to the next claimable slot');
+  const slot1 = await registry.read(REPO, 'slot-1');
+  assert.ok(slot1.ok && slot1.record?.claimant === 999, 'the winner keeps slot-1');
+});
+
+test('feat-007/AC-1 with pooling off, the scout session is never requested', async () => {
+  const { ports, registry, deployer } = harness();
+  let scouted = 0;
+  const withSpy: DeployPorts = {
+    ...ports,
+    broker: fakeBroker(registry, deployer, {
+      scout: registry,
+      onScout: () => {
+        scouted += 1;
+      },
+    }),
+  };
+  const result = await deployEnvironment(withSpy);
+  assert.equal(result.kind, 'deployed');
+  if (result.kind === 'deployed') {
+    assert.equal(result.identity, 'pr-482');
+    assert.equal(result.poolPath, null);
+  }
+  assert.equal(scouted, 0, 'pooling off: nothing new is ever requested');
+});
+
+test('feat-007 pooling enabled without a scout-capable broker fails closed, loudly', async () => {
+  const store = new FakeStore();
+  const registry = new Registry(store, { now: fixedClock() });
+  const deployer = new FakeDeployer();
+  const ports: DeployPorts = {
+    trigger: fakeTrigger({ ok: true, context: context() }),
+    configSource: fakeConfigSource(POOLED_CONFIG),
+    broker: fakeBroker(registry, deployer), // no openScout at all
+    now: tickingClock(0),
+  };
+  const result = await deployEnvironment(ports);
+  assert.equal(result.kind, 'failed');
+  if (result.kind === 'failed') assert.ok(result.message.includes('pool'), result.message);
+  assert.equal(deployer.called, false);
+});
+
+test('feat-001/AC-38 an inconclusive collision retries the same slot at most twice more', async () => {
+  // A scout registry double whose pool claim keeps colliding inconclusively: the run
+  // retries the same slot exactly twice more, then treats it as lost and goes cold.
+  const store = new FakeStore();
+  const registry = new Registry(store, { now: fixedClock() });
+  await seedWarmSlot(registry, 'slot-1');
+  const attempts: string[] = [];
+  const contendedScout = new Proxy(registry, {
+    get(target, property) {
+      if (property === 'poolClaim') {
+        return async (_repo: string, identity: string) => {
+          attempts.push(identity);
+          return { ok: false, reason: 'contended' };
+        };
+      }
+      // Bound to the real registry: its private fields live there, not on the proxy.
+      const value = Reflect.get(target, property, target) as unknown;
+      return typeof value === 'function' ? (value as (...a: unknown[]) => unknown).bind(target) : value;
+    },
+  });
+  const deployer = new FakeDeployer();
+  const opened: string[] = [];
+  const ports: DeployPorts = {
+    trigger: fakeTrigger({ ok: true, context: context() }),
+    configSource: fakeConfigSource(POOLED_CONFIG),
+    broker: fakeBroker(registry, deployer, {
+      scout: contendedScout,
+      onOpen: (request) => opened.push(request.identity),
+    }),
+    now: tickingClock(0),
+  };
+
+  const result = await deployEnvironment(ports);
+
+  assert.deepEqual(attempts, ['slot-1', 'slot-1', 'slot-1'], 'three attempts, same slot');
+  assert.equal(result.kind, 'deployed');
+  if (result.kind === 'deployed') {
+    assert.equal(result.identity, 'pr-482', 'exhausted contention falls back to cold');
+    assert.equal(result.poolPath, 'cold');
+  }
+});

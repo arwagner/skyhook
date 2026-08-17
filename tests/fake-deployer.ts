@@ -60,13 +60,39 @@ export function fakeConfigSource(document: string | null): ConfigSource {
   return { fetch: async () => fetched };
 }
 
-export function fakeBroker(registry: Registry, deployer: EnvironmentDeployer): AccessBroker {
-  return {
-    open: async (_request: AccessRequest): Promise<AccessOutcome> => ({
-      ok: true,
-      grant: { registry, deployer },
-    }),
+export interface FakeBrokerOptions {
+  /**
+   * The scout session's registry (feat-007). Absent means this broker predates pooling
+   * and exposes no `openScout` at all — the fail-closed case core must refuse loudly.
+   * Tests pass the same registry to prove the scout path is exercised, or a distinct
+   * one to prove which session did what.
+   */
+  readonly scout?: Registry;
+  /** Observes every ordinary open — the narrowing tests read the identity asked for. */
+  readonly onOpen?: (request: AccessRequest) => void;
+  /** Observes every scout open, so "pooling off never scouts" is assertable. */
+  readonly onScout?: () => void;
+}
+
+export function fakeBroker(
+  registry: Registry,
+  deployer: EnvironmentDeployer,
+  options: FakeBrokerOptions = {},
+): AccessBroker {
+  const broker: AccessBroker = {
+    open: async (request: AccessRequest): Promise<AccessOutcome> => {
+      options.onOpen?.(request);
+      return { ok: true, grant: { registry, deployer } };
+    },
   };
+  if (options.scout !== undefined) {
+    const scout = options.scout;
+    broker.openScout = async () => {
+      options.onScout?.();
+      return { ok: true, registry: scout };
+    };
+  }
+  return broker;
 }
 
 export function refusingBroker(

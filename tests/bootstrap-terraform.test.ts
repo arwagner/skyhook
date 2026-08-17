@@ -61,15 +61,15 @@ test('feat-001/AC-17 the pull-request role is confined to the ephemeral namespac
   // An explicit deny on everything outside that set — the constitution asks for explicit deny,
   // not merely for an absent allow.
   assert.match(roles, /sid\s*=\s*"DenyEverythingOutsideTheEphemeralNamespace"/);
-  // feat-001/AC-29, amended by feat-003 — the deny carves out exactly three things beyond the
-  // ephemeral namespace: the bucket itself, the one state key the backend consults before a
-  // workspace can be selected (chg-008), and the repository's own ephemeral protection marks
-  // (the constitution's third exception — reads only, since the everything-but-read deny on the
-  // protection prefix still stands).
-  // Nothing else may join that list without a delta — this assertion is where that is enforced.
+  // feat-001/AC-29, amended by feat-003 and by feat-007 (chg-009) — the deny carves out the
+  // bucket itself, the one state key the backend consults before a workspace can be selected
+  // (chg-008), the repository's own ephemeral protection marks (third exception — reads only),
+  // and the slot namespace (fourth exception — records get no delete anywhere, and their own
+  // explicit deny besides). Nothing else may join this list without a delta — this assertion
+  // is where that is enforced.
   assert.match(
     roles,
-    /not_resources\s*=\s*concat\(\s*\[local\.bucket_arn, local\.default_workspace_state\],\s*local\.pull_request_objects,\s*\["\$\{local\.bucket_arn\}\/\$\{local\.protection_prefix\}\/pr-\*"\],\s*\)/,
+    /not_resources\s*=\s*concat\(\s*\[local\.bucket_arn, local\.default_workspace_state\],\s*local\.pull_request_objects,[\s\S]*?local\.slot_record_objects,\s*local\.slot_state_objects,\s*\[\s*"\$\{local\.bucket_arn\}\/\$\{local\.protection_prefix\}\/pr-\*",\s*"\$\{local\.bucket_arn\}\/\$\{local\.protection_prefix\}\/slot-\*",\s*\],\s*\)/,
   );
   // And that key is READ-only. A write to it must still be refused, or a pull request could
   // plant a default-workspace state for the next run to pick up.
@@ -178,9 +178,14 @@ test('feat-002/AC-17 listing widens to the repository, and no object grant moves
   assert.match(roles, /"\$\{local\.registry_prefix\}\/",/, 'cannot enumerate the registry');
   assert.match(roles, /"\$\{local\.state_prefix\}\/",/, 'cannot enumerate workspaces');
 
-  // Unchanged: every object action still stops at this run's own pr-* namespace.
+  // Unchanged in kind: every full object grant still stops at this run's ephemeral
+  // namespace — pr-* plus, since feat-007, the slot state whose lockfile an apply must
+  // manage. Slot records ride a separate get-and-put-only statement, asserted elsewhere.
   const objects = roles.slice(roles.indexOf('pull_request_permissions'));
-  assert.match(objects, /actions\s*=\s*\["s3:GetObject", "s3:PutObject", "s3:DeleteObject"\]\s*\n\s*resources = local\.pull_request_objects/);
+  assert.match(
+    objects,
+    /actions\s*=\s*\["s3:GetObject", "s3:PutObject", "s3:DeleteObject"\]\s*\n\s*resources = concat\(local\.pull_request_objects, local\.slot_state_objects\)/,
+  );
   assert.match(roles, /pr-\*\.json/);
   assert.match(roles, /pr-\*\/\*/);
 });
@@ -321,4 +326,38 @@ test('feat-001/AC-34 what the roles trust is fixed at apply time and can only na
     /^\s*default\s*=/m,
     'a default would silently restore the assumption chg-009 removed',
   );
+});
+
+// --- the warm slot pool's role widening (feat-007, chg-009) -------------------
+
+test('feat-007/AC-11 the pull-request role reads and claims slot records, and can never delete one', () => {
+  const roles = source('roles.tf');
+
+  // Granted: read + the conditional claim write on slot records; full state parity
+  // with pr-* (delete included — the state lockfile requires it, chg-001).
+  assert.match(roles, /slot_record_objects\s*=\s*\["\$\{local\.bucket_arn\}\/\$\{local\.registry_prefix\}\/slot-\*\.json"\]/);
+  assert.match(roles, /slot_state_objects\s*=\s*\["\$\{local\.bucket_arn\}\/\$\{local\.state_prefix\}\/slot-\*\/\*"\]/);
+  assert.match(roles, /sid\s*=\s*"ReadAndClaimSlotRecords"/);
+  assert.match(roles, /concat\(local\.pull_request_objects, local\.slot_state_objects\)/);
+
+  // Absent: the ReadAndClaimSlotRecords statement grants exactly GetObject and PutObject.
+  const claimStatement = roles.split('ReadAndClaimSlotRecords')[1]?.split('statement')[0] ?? '';
+  assert.match(claimStatement, /"s3:GetObject", "s3:PutObject"/);
+  assert.ok(!claimStatement.includes('DeleteObject'), 'no delete on slot records');
+
+  // And the belt-and-braces explicit deny stands.
+  assert.match(roles, /sid\s*=\s*"NeverDeleteASlotRecord"/);
+  const denyStatement = roles.split('NeverDeleteASlotRecord')[1]?.split('statement')[0] ?? '';
+  assert.match(denyStatement, /effect\s*=\s*"Deny"/);
+  assert.match(denyStatement, /"s3:DeleteObject"/);
+});
+
+test('feat-007/AC-11 slot protection marks are readable, never writable, and listed for 404s', () => {
+  const roles = source('roles.tf');
+  assert.match(roles, /protection_prefix\}\/slot-\*/);
+  // The everything-but-read deny on protected/* is untouched — one pattern covers slots too.
+  assert.match(roles, /sid\s*=\s*"DenyAllButReadingProtectionMarks"/);
+  const markDeny = roles.split('DenyAllButReadingProtectionMarks')[1]?.split('statement')[0] ?? '';
+  assert.match(markDeny, /not_actions\s*=\s*\["s3:GetObject"\]/);
+  assert.match(markDeny, /protected\/\*/);
 });

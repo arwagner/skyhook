@@ -342,6 +342,7 @@ function deployedResult(outputs: {
   return {
     kind: 'deployed' as const,
     identity: 'pr-482',
+    poolPath: null,
     commit: 'a1b2c3',
     url: 'https://pr-482.example',
     outputs,

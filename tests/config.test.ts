@@ -255,3 +255,38 @@ test('feat-001/AC-35 an exception naming nothing declared is refused as a likely
   if (outcome.ok) return;
   assert.ok(outcome.problems.some((p) => p.includes('api_token')));
 });
+
+// --- pool (feat-007) ---------------------------------------------------------
+
+test('feat-007/AC-1 no pool setting means pooling is off', () => {
+  const outcome = parseConfig(STORAGE);
+  assert.ok(outcome.ok);
+  if (outcome.ok) assert.equal(outcome.config.pool, null);
+});
+
+test('feat-007/AC-1 a pool target of zero is pooling off, not a pool of nothing', () => {
+  const outcome = parseConfig(`${STORAGE}\npool:\n  target: 0\n`);
+  assert.ok(outcome.ok);
+  if (outcome.ok) assert.equal(outcome.config.pool, null);
+});
+
+test('feat-007 pool.target is read as a whole positive number', () => {
+  const outcome = parseConfig(`${STORAGE}\npool:\n  target: 2\n`);
+  assert.ok(outcome.ok);
+  if (outcome.ok) assert.deepEqual(outcome.config.pool, { target: 2 });
+});
+
+test('feat-007 a malformed pool target is refused loudly, never defaulted', () => {
+  for (const bad of ['target: -1', 'target: 1.5', 'target: two']) {
+    const outcome = parseConfig(`${STORAGE}\npool:\n  ${bad}\n`);
+    assert.equal(outcome.ok, false, bad);
+    if (!outcome.ok) {
+      assert.ok(
+        outcome.problems.some((p) => p.includes('pool.target')),
+        `${bad}: ${outcome.problems.join('; ')}`,
+      );
+    }
+  }
+  const missing = parseConfig(`${STORAGE}\npool:\n  targets: 2\n`);
+  assert.equal(missing.ok, false);
+});

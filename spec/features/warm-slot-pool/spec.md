@@ -199,12 +199,16 @@ assumption gets a working preview at a new URL and wasted warmth, not a broken o
   conservatism, not this criterion.)
 - [ ] AC-11: Pull-request credentials can claim and then act only within the one slot claimed,
   with the enforcement split stated honestly. Refused by the cloud: any delete of a slot's
-  record, its stored state, or its protection mark — the pull-request role holds no delete on
-  the slot namespace, so a destroy is impossible however skyhook's code misbehaves. Refused by
-  skyhook, behind the same guardrail-not-boundary as every in-namespace act (the standing
-  non-isolation decision): minting a slot record — the cloud cannot tell a record creation
-  from the claim write on the same key — and any post-claim write to a slot other than the one
-  claimed, which the session narrowing excludes. Demonstrated on the live installation: the
+  registry record or its protection mark — the pull-request role holds no delete on either,
+  so freeing a slot's name is impossible however skyhook's code misbehaves, and a recorded
+  slot is always a slot the sweep can find and destroy. Slot *state* deletes are granted,
+  because the infrastructure tool's locking and state maintenance require them on every apply
+  (`pr-*` state carries the identical grant today); a collaborator's run deleting a sibling's
+  state is priced by the standing non-isolation decision and adds no new exposure class
+  (chg-001). Refused by skyhook, behind the same guardrail-not-boundary as every in-namespace
+  act: minting a slot record — the cloud cannot tell a record creation from the claim write
+  on the same key — and any post-claim write to a slot other than the one claimed, which the
+  session narrowing excludes. Demonstrated on the live installation: the record and mark
   delete refusals by attempting them, the narrowing by inspecting the issued request.
 - [ ] AC-12: Skyhook's own overhead on the warm-claim path (claim, narrowing, recording;
   excluding the repo's apply and the tool's preparation step) stays within the product's

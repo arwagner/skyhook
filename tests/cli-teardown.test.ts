@@ -242,7 +242,12 @@ function seededAccess(options: { protectedMark?: boolean } = {}): {
   const destroyer = new FakeDestroyer();
   const open: ManualAccessOpener = async () => ({
     ok: true,
-    access: { registry, store, destroyerFor: async () => ({ ok: true, destroyer }) },
+    access: {
+      registry,
+      store,
+      destroyerFor: async () => ({ ok: true, destroyer }),
+      builderFor: async () => ({ ok: false, problem: 'this test never builds' }),
+    },
   });
   return { store, registry, destroyer, open };
 }
@@ -355,4 +360,119 @@ test('feat-003/AC-15 feat-001/AC-37 the MANUAL starter replays recorded inputs â
 
   assert.equal(code, 0);
   assert.deepEqual(destroyer.requests[0]?.deployInputs, { image_tag: 'a1b2c3d4' });
+});
+
+// --- the pooled close fast path (feat-007) ------------------------------------
+
+const POOLED_CONFIG_YAML = `${CONFIG_YAML}
+pool:
+  target: 1
+`;
+
+const pooledConfigFetch: typeof globalThis.fetch = async (url) => {
+  const target = String(url);
+  if (target.includes('/contents/')) return new Response(POOLED_CONFIG_YAML, { status: 200 });
+  if (target.includes('/repos/')) {
+    return new Response(JSON.stringify({ default_branch: 'main' }), { status: 200 });
+  }
+  throw new Error(`unexpected network call: ${target}`);
+};
+
+function pooledCloseHarness(options: { claimant?: number } = {}): {
+  store: FakeStore;
+  registry: Registry;
+  destroyer: FakeDestroyer;
+} {
+  const store = new FakeStore();
+  const registry = new Registry(store, { now: () => '2026-08-17T00:00:00.000Z' });
+  store.seed(
+    registryKeyFor('acme/widgets', 'slot-1'),
+    JSON.stringify({
+      schemaVersion: 1,
+      repository: 'acme/widgets',
+      identity: 'slot-1',
+      state: 'active',
+      deployedCommit: 'a1b2c3d4',
+      url: 'https://slot-1.example.test',
+      claimant: options.claimant ?? 482,
+      createdAt: '2026-08-16T00:00:00.000Z',
+      updatedAt: '2026-08-16T00:00:00.000Z',
+    }),
+  );
+  store.seed(`${stateDirFor('acme/widgets', 'slot-1')}terraform.tfstate`, '{"resources":[]}');
+  return { store, registry, destroyer: new FakeDestroyer() };
+}
+
+test('feat-007/AC-8 a close on a pooled repository finds the slot by claimant and tears it down', async () => {
+  const { store, registry, destroyer } = pooledCloseHarness();
+  const out = collect();
+  const code = await teardown({
+    env: env({ GITHUB_EVENT_PATH: join(import.meta.dirname, 'fixtures-pull-request.json') }),
+    runner: silentRunner,
+    out: out.sink,
+    err: collect().sink,
+    fetch: pooledConfigFetch,
+    openScoutAccess: async () => ({ ok: true, registry }),
+    openCloseAccess: async () => ({
+      ok: true,
+      access: { registry, store, makeDestroyer: async () => ({ ok: true, destroyer }) },
+    }),
+  });
+
+  assert.equal(code, 0);
+  assert.equal(destroyer.requests[0]?.identity, 'slot-1');
+  assert.equal(store.rawValue(registryKeyFor('acme/widgets', 'slot-1')), undefined);
+  assert.match(out.lines.join(' '), /slot-1/);
+});
+
+test('feat-007/AC-8 a failed claimant lookup stops loudly and destroys nothing', async () => {
+  const { store, destroyer } = pooledCloseHarness();
+  const err = collect();
+  const code = await teardown({
+    env: env({ GITHUB_EVENT_PATH: join(import.meta.dirname, 'fixtures-pull-request.json') }),
+    runner: silentRunner,
+    out: collect().sink,
+    err: err.sink,
+    fetch: pooledConfigFetch,
+    openScoutAccess: async () => ({ ok: false, problem: 'scout role refused' }),
+    openCloseAccess: async () => {
+      throw new Error('the close path must not proceed past a failed lookup');
+    },
+  });
+
+  assert.equal(code, 1);
+  assert.equal(destroyer.called, false);
+  assert.match(err.lines.join(' '), /sweep completes/);
+  assert.ok(store.rawValue(registryKeyFor('acme/widgets', 'slot-1')) !== undefined);
+});
+
+test('feat-007/AC-8 a pooled close with no slot falls through to the derived identity', async () => {
+  // Another pull request holds the slot; this one deployed cold (or never deployed).
+  const { store, registry } = pooledCloseHarness({ claimant: 999 });
+  const out = collect();
+  const openedFor: string[] = [];
+  const code = await teardown({
+    env: env({ GITHUB_EVENT_PATH: join(import.meta.dirname, 'fixtures-pull-request.json') }),
+    runner: silentRunner,
+    out: out.sink,
+    err: collect().sink,
+    fetch: pooledConfigFetch,
+    openScoutAccess: async () => ({ ok: true, registry }),
+    openCloseAccess: async (_config, _repo, identity) => {
+      openedFor.push(identity);
+      return {
+        ok: true,
+        access: {
+          registry,
+          store,
+          makeDestroyer: async () => ({ ok: false, problem: 'never reached: no record' }),
+        },
+      };
+    },
+  });
+
+  assert.equal(code, 0);
+  assert.deepEqual(openedFor, ['pr-482']);
+  assert.match(out.lines.join(' '), /nothing to tear down/i);
+  assert.ok(store.rawValue(registryKeyFor('acme/widgets', 'slot-1')) !== undefined, 'the sibling slot is untouched');
 });

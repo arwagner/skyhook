@@ -20,8 +20,9 @@ import { identityFor, pullRequestNumberFor } from '../core/identity.ts';
 import { teardownEnvironment, type TeardownResult } from '../core/teardown.ts';
 import { GitHubConfigSource } from '../adapters/github/config-source.ts';
 import { GitHubTriggerSource } from '../adapters/github/event.ts';
-import { AwsAccessBroker, type SweepAccessOutcome } from '../adapters/aws/broker.ts';
+import { AwsAccessBroker, type SweepAccessOutcome, type TeardownAccessOutcome } from '../adapters/aws/broker.ts';
 import { requireDefaultBranchRef } from './ref-check.ts';
+import type { ScoutOutcome } from '../core/ports.ts';
 import type { SkyhookConfig } from '../core/types.ts';
 import type { CommandRunner } from './process.ts';
 
@@ -30,6 +31,17 @@ export type ManualAccessOpener = (
   config: SkyhookConfig,
   repository: string,
 ) => Promise<SweepAccessOutcome>;
+
+/** Test seams for the close path's pooled lookup (feat-007); production wires the broker. */
+export type ScoutAccessOpener = (
+  config: SkyhookConfig,
+  repository: string,
+) => Promise<ScoutOutcome>;
+export type CloseAccessOpener = (
+  config: SkyhookConfig,
+  repository: string,
+  identity: string,
+) => Promise<TeardownAccessOutcome>;
 
 /** The consuming repo's own destroy failed. Distinct from skyhook failing (plan D8). */
 export const EXIT_CONSUMER_DESTROY_FAILED = 3;
@@ -43,6 +55,9 @@ export interface TeardownOptions {
   readonly environment?: string | undefined;
   /** Injected for tests. Defaults to `AwsAccessBroker.openManual`. */
   readonly openManualAccess?: ManualAccessOpener;
+  /** Injected for tests. Defaults to `AwsAccessBroker.openScout` / `openTeardown`. */
+  readonly openScoutAccess?: ScoutAccessOpener;
+  readonly openCloseAccess?: CloseAccessOpener;
   readonly fetch?: typeof globalThis.fetch;
   readonly now?: () => number;
 }
@@ -101,7 +116,7 @@ export async function teardown(options: TeardownOptions): Promise<number> {
     options.err(`skyhook teardown: cannot derive an environment identity: ${derived.reason}`);
     return 1;
   }
-  const identity = derived.identity;
+  let identity = derived.identity;
 
   const loaded = await loadConfig(
     new GitHubConfigSource({
@@ -122,12 +137,39 @@ export async function teardown(options: TeardownOptions): Promise<number> {
     ...(options.fetch !== undefined ? { fetch: options.fetch } : {}),
     ...(options.now !== undefined ? { now: options.now } : {}),
   });
-  const opened = await broker.openTeardown({
-    config: loaded.config,
-    repository,
-    identity,
-    triggerKind: 'pull-request',
-  });
+
+  // On a pooled repository this pull request's environment may be a slot, and the
+  // claimant — not the identity — says which (feat-007/AC-8). The lookup rides the same
+  // scout session a deploy claims through; a failed lookup stops loudly, and the
+  // scheduled sweep completes the teardown within one interval — correctness never
+  // depends on this fast path (constitution).
+  if (loaded.config.pool !== null) {
+    const openScout: ScoutAccessOpener =
+      options.openScoutAccess ?? ((config, repo) => broker.openScout({ config, repository: repo }));
+    const scout = await openScout(loaded.config, repository);
+    if (!scout.ok) {
+      options.err(
+        `skyhook teardown: the pool-scout session could not be opened (${scout.problem}). ` +
+          'Destroying nothing; the scheduled sweep completes this teardown.',
+      );
+      return 1;
+    }
+    const found = await scout.registry.findSlotByClaimant(repository, pullRequestNumber);
+    if (!found.ok) {
+      options.err(
+        `skyhook teardown: the pool could not be read (${found.reason}). ` +
+          'Destroying nothing; the scheduled sweep completes this teardown.',
+      );
+      return 1;
+    }
+    if (found.slot !== null) identity = found.slot.identity;
+  }
+
+  const openClose: CloseAccessOpener =
+    options.openCloseAccess ??
+    ((config, repo, id) =>
+      broker.openTeardown({ config, repository: repo, identity: id, triggerKind: 'pull-request' }));
+  const opened = await openClose(loaded.config, repository, identity);
   if (!opened.ok) {
     options.err(`skyhook teardown: ${opened.problem}`);
     return 1;

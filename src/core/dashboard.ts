@@ -54,7 +54,11 @@ export function buildDashboardModel(
       const isProtected = marked.has(record.identity);
       return {
         record,
-        pullRequest: pullRequestFromIdentity(record.identity),
+        // For a pooled slot the claimant — an explicitly recorded field (feat-001/AC-39) —
+        // is the one sanctioned second source of a PR number (chg-002 against AC-1); any
+        // identity that is neither `pr-<n>` nor a claimed slot renders with no number
+        // rather than a guessed one.
+        pullRequest: pullRequestFromIdentity(record.identity) ?? record.claimant,
         isProtected,
         reclaimable: record.state === 'released' && !isProtected,
       };
@@ -105,6 +109,11 @@ function capLine(model: DashboardModel): string {
 function statusCell(row: DashboardRow): string {
   if (row.isProtected) return '<strong>protected</strong>';
   if (row.reclaimable) return '<strong>reclaimable</strong>';
+  // A warm slot is the pool doing its job, never a freeable leftover (chg-002): claimable
+  // once its build's commit is recorded, building until then.
+  if (row.record.state === 'warm') {
+    return row.record.deployedCommit === null ? 'warm — building' : 'warm — claimable';
+  }
   return 'in use';
 }
 
@@ -134,7 +143,7 @@ ${field('Pull request', row.pullRequest === null ? '—' : String(row.pullReques
 ${field('State', escapeHtml(record.state))}
 ${field('Protected', row.isProtected ? 'yes' : 'no')}
 ${field('Deployed commit', record.deployedCommit === null ? PENDING : `<code>${escapeHtml(record.deployedCommit)}</code>`)}
-${field('Created', escapeHtml(record.createdAt))}
+${record.claimant === null ? '' : `${field('Claimant pull request', String(record.claimant))}\n`}${field('Created', escapeHtml(record.createdAt))}
 ${field('Updated', escapeHtml(record.updatedAt))}
 ${field('URL', urlCell(record.url))}${deployInputRows(record.deployInputs, field)}
 </dl>

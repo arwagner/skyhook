@@ -58,6 +58,13 @@ const IDENTITY_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
  */
 export const EPHEMERAL_NAMESPACE_PREFIX = 'pr-';
 /**
+ * Every name beginning `slot-` is a warm slot's (feat-007 plan D1) — inside the ephemeral
+ * namespace, assigned by the pool builder by index, never chosen by an operator. Reserving
+ * the prefix here is what makes the spec's disjoint-namespaces assumption a tested
+ * assertion rather than documentation.
+ */
+export const SLOT_NAMESPACE_PREFIX = 'slot-';
+/**
  * 63 is the DNS label limit. An environment's identity ends up in hostnames — a preview URL, a
  * generated record — long before anything checks, so the bound belongs at the point the identity
  * is chosen rather than at the point it first fails to fit (AC-20).
@@ -87,10 +94,30 @@ function validIdentity(identity: string): IdentityOutcome {
   if (!IDENTITY_PATTERN.test(identity) || identity.length > MAX_IDENTITY_LENGTH) {
     return { ok: false, reason: 'invalid-identity' };
   }
-  if (identity.startsWith(EPHEMERAL_NAMESPACE_PREFIX)) {
+  if (
+    identity.startsWith(EPHEMERAL_NAMESPACE_PREFIX) ||
+    identity.startsWith(SLOT_NAMESPACE_PREFIX)
+  ) {
     return { ok: false, reason: 'reserved-namespace' };
   }
   return { ok: true, identity };
+}
+
+/** The identity of the warm slot at `index`. The pool builder's counterpart of `derivedIdentityFor`. */
+export function slotIdentityFor(index: number): string {
+  return `slot-${index}`;
+}
+
+/**
+ * The reverse of `slotIdentityFor`: the slot number an identity names, or null when the
+ * identity is not a warm slot's at all. Like `pullRequestNumberFor`, this is fed
+ * identities recovered from registry KEYS, never from record bodies.
+ */
+export function slotNumberFor(identity: string): number | null {
+  const match = /^slot-([1-9][0-9]*)$/.exec(identity);
+  if (match === null) return null;
+  const parsed = Number(match[1]);
+  return Number.isSafeInteger(parsed) ? parsed : null;
 }
 
 /**

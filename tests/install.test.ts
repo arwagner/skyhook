@@ -295,6 +295,11 @@ test('feat-002/AC-21 the seeded settings file parses as written, with every blan
     assert.match(document, /#deploy:/, 'a slot for the deploy block');
     assert.match(document, /#  directory:/, 'including the setting that block requires');
     assert.match(document, /deploy-role\.example\.tf/, 'and where the role it names comes from');
+    // feat-007: the pool ships as a labelled, commented slot too — off until chosen — and the
+    // seeded file must keep parsing with it untouched.
+    assert.match(document, /#pool:/, 'a slot for the warm slot pool');
+    assert.match(document, /#  target:/, 'including its one setting');
+    assert.equal(parsed.config.pool, null, 'pooling is off until chosen');
 
     // The rule itself is stated in the file, because the file is where someone reads it.
     assert.match(document, /THIS FILE IS YOURS/);
