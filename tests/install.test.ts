@@ -388,7 +388,7 @@ test('feat-002/AC-15 the scaffolded workflow runs skyhook and hands no secrets t
     init({ repositoryRoot: root, ...OPTIONS });
     const workflow = readFileSync(join(root, '.skyhook/workflow.yml'), 'utf8');
 
-    assert.match(workflow, /uses: skylight-hq\/skyhook@/, 'never actually calls skyhook');
+    assert.match(workflow, /uses: arwagner\/skyhook@/, 'never actually calls skyhook');
     assert.doesNotMatch(workflow, /not built yet/, 'still claims the action does not exist');
 
     // The one that matters. `secrets: inherit` would hand every repository secret to a job
