@@ -128,7 +128,10 @@ assumption gets a working preview at a new URL and wasted warmth, not a broken o
   - Given claimable warm slots and two concurrent pull-request runs
   - When both attempt the conditional claim on the same slot
   - Then exactly one succeeds; the other observes the loss (never a silent overwrite), attempts
-    the next claimable slot, and proceeds as if the pool were empty only when none remain
+    the next claimable slot, and proceeds as if the pool were empty only when none remain — a
+    genuinely lost race moves on at once, while an inconclusive collision retries the same
+    slot at most twice more before being treated as lost, so the whole claim step stays well
+    inside skyhook's 60-second share
 
 - **Scenario: the pool is empty — cold fallback (od-2, decided)**
   - Given no claimable warm slot
@@ -143,6 +146,8 @@ assumption gets a working preview at a new URL and wasted warmth, not a broken o
   - Then the slot is released and destroyed exactly as an ephemeral environment is today, its
     record deleted only after verified destruction — and it is never handed to another pull
     request without that destroy and a fresh build
+  - And given a slot whose claimant's state cannot be determined (a failed lookup), the sweep
+    leaves that slot alone and reports it, destroying only on a positive "closed" answer
 
 - **Scenario: the sweep clears wreckage conservatively**
   - Given a `warm` record with no deployed commit that this pass did not itself create
@@ -152,8 +157,6 @@ assumption gets a working preview at a new URL and wasted warmth, not a broken o
     racing the destroy loses at the record instead of racing invisible cloud calls, and it
     honors a protection mark exactly as every destroy does: a protected slot is reported, not
     destroyed
-  - And given a slot whose claimant's state cannot be determined (a failed lookup), the sweep
-    leaves that slot alone and reports it, destroying only on a positive "closed" answer
 
 - **Scenario: the cap holds (od-3, decided)**
   - Given warm and active environments together at the configured cap
@@ -191,12 +194,18 @@ assumption gets a working preview at a new URL and wasted warmth, not a broken o
   the cap builds nothing and reports the cap as the reason.
 - [ ] AC-10: A commitless `warm` record not created by the running pass is destroyed by that
   pass — after a version-bumping release write, and only if the identity carries no protection
-  mark; a protected slot and a slot whose claimant lookup fails are each left standing and
-  reported.
-- [ ] AC-11: Pull-request credentials can claim and then act only within the one slot claimed:
-  an attempted slot build, an attempted destroy, and an attempted write to another slot's
-  record are each refused — the first two by the cloud, the last by skyhook's narrowing —
-  demonstrated on the live installation.
+  mark; a protected slot is left standing and reported. (A failed claimant lookup — the other
+  leave-alone case — belongs to the claimant-closes path and is covered by AC-8's
+  conservatism, not this criterion.)
+- [ ] AC-11: Pull-request credentials can claim and then act only within the one slot claimed,
+  with the enforcement split stated honestly. Refused by the cloud: any delete of a slot's
+  record, its stored state, or its protection mark — the pull-request role holds no delete on
+  the slot namespace, so a destroy is impossible however skyhook's code misbehaves. Refused by
+  skyhook, behind the same guardrail-not-boundary as every in-namespace act (the standing
+  non-isolation decision): minting a slot record — the cloud cannot tell a record creation
+  from the claim write on the same key — and any post-claim write to a slot other than the one
+  claimed, which the session narrowing excludes. Demonstrated on the live installation: the
+  delete refusals by attempting them, the narrowing by inspecting the issued request.
 - [ ] AC-12: Skyhook's own overhead on the warm-claim path (claim, narrowing, recording;
   excluding the repo's apply and the tool's preparation step) stays within the product's
   60-second budget, measured by the same accounting deploys use today.
@@ -230,6 +239,10 @@ assumption gets a working preview at a new URL and wasted warmth, not a broken o
   an open decision on the manifest so implementation cannot start ahead of it.
 - **Cap starvation is possible by configuration.** A pool target at or near the cap can leave
   no headroom for cold fallbacks; the sweep's report is the only alarm. Accepted at prototype.
+- **Dashboard visibility is specified in the dashboard's own change folder, deliberately not
+  here.** Warm and claimed slots appearing distinctly on the dashboard is feat-005 `chg-002`'s
+  requirement, drafted and built with this feature (manifest ext-2); this spec carries no
+  dashboard criterion so the requirement has exactly one home.
 - **The claimant is self-reported, and slots can be seized.** The conditional claim fixes
   which record and which version may change, not what is written into it, so a collaborator's
   run can record a claimant that is not its own — misdirecting slot cleanup at a sibling's

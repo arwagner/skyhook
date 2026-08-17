@@ -23,13 +23,21 @@ readiness:                   # per-artifact progress vector
   design:   n/a              # design not required in this workspace (requires_design: false)
   spec:     ready            # none | draft | ready — written and reviewed 2026-08-17; zero
                              #   clarification markers; reviewer's fixes folded in
-  plan:     none             # none | draft | ready
+  plan:     ready            # none | draft | ready — plan + tasks written 2026-08-17; one
+                             #   build with chg-012/chg-009 and a drafted feat-005 chg-002
   tasks:    none             # none | draft | ready
 gate:
-  analyze: not-run           # not-run | pass | blocking | blocking-hard
-  product_global_hash: ""
-  constitution_hash: ""
-human_signoff: []
+  analyze: pass              # 2026-08-17: first pass fix-then-implement (B1 hard: honest
+                             #   cloud/guardrail split in AC-11/D8; B2: retry bound), all
+                             #   closures independently re-verified + two residues patched
+                             #   same day; see analyze.md
+  product_global_hash: "sha256:ccb9ae0efc1f"
+  constitution_hash: "sha256:6e2b3ffe7ec9"
+human_signoff:
+  - id: hs-1
+    description: "Task 8.1 — live end-to-end on the deadweight repo with pool.target 1: warm build, warm claim (measure skyhook's share vs the 60 s budget), push refresh, cloud refusals of slot build/destroy from PR credentials, close-destroy-rebuild, conditional-write probe on slot records. Blocks completion, not start."
+    owner: "andrew"
+    resolved: false
 open_decisions:
   - id: od-1
     description: "U1 — where warm-boot input values come from. DECIDED 2026-08-17 (andrew): the scheduled default-branch workflow supplies TF_VAR_* for the warm build, mirroring the deploy workflow's contract; no static pool.inputs block. Static config was declined because artifact values (image tags) go stale per commit."
@@ -44,7 +52,7 @@ open_decisions:
     owner: "andrew"
     resolved: true
   - id: od-4
-    description: "Build-order gate: the reopened clauses must land before implementation. RESOLVED 2026-08-17 — all merged on main: backing-store chg-012 (pool claiming + warm state), deploy-action chg-009 (slot namespace + two-phase narrowing), the product-global glossary amendment (commit 790a429), and the constitution's fourth named exception (commit 554ccf2), which the pre-build gate added to the list. Both feature gates re-checked to pass the same day."
+    description: "Build-order gate: the reopened clauses must land before implementation. RESOLVED 2026-08-17 — the approved amendments are on main: the chg-012 and chg-009 change-folder artifacts (proposal + delta; their fold into the two canonical spec.md files is deliberately deferred to task 8.2, after the build verifies — the declared-deploy-inputs precedent), the product-global glossary amendment (commit 790a429), and the constitution's fourth named exception (commit 554ccf2). Both sibling gates re-checked to pass the same day."
     owner: "andrew"
     resolved: true
 overrides: []                # prototype-depth gate overrides; appended ONLY by flow at a STOP,

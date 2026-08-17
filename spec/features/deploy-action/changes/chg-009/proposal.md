@@ -29,11 +29,15 @@ where the fresh claim sits today.
   constitution's fourth named exception (both main-branch commits, landed 2026-08-17) —
   feat-007 od-4.
 - **Role layer (cloud), named per the hs-1 precedent:** the fourth exception must hold at the
-  role as well as the session, so the pull-request role's object grants widen to the
-  repository's slot records — read, and the conditional claim write, on `slot-<n>` registry
-  keys — alongside the existing listing widening. Nothing else at the role changes; the
-  grant is inert on a repository with pooling off (no slot records exist). Lands with
-  feat-007's plan, which owns the exact pattern language.
+  role as well as the session, so the pull-request role widens in two places. Registry: read,
+  and the conditional claim write (put, never delete), on `slot-<n>` registry keys —
+  alongside the existing listing widening. State: the `slot-*` workspaces' state prefixes are
+  granted the way `pr-*` state is granted today — role-wide across the namespace, narrowed to
+  the one claimed identity per session — because a claimed slot's re-apply must reach its own
+  Terraform state. No delete action anywhere in the slot namespace, which is what keeps slot
+  destruction cloud-refused to a pull-request run. Both grants are inert on a repository with
+  pooling off (no slot records or workspaces exist). Lands with feat-007's plan, which owns
+  the exact pattern language.
 - Requirements affected: **the confinement paragraph** ("A pull request's credentials are
   confined to ephemeral environments…") — gains the namespace definition and the pre-claim
   read; **AC-19** — the issuance-time wording is amended so the acting narrowing is pinned
