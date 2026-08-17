@@ -17,7 +17,7 @@ readiness:
   plan:     ready
   tasks:    ready            # phase 13 (chg-008) built and verified 2026-08-17; chg-008 delta folded 2026-08-17
 gate:
-  analyze: pass              # 2026-08-17 re-gate: B1-B4 closed (delimiter hardened at the shared writer, fixes url too), tightening folded; see analyze.md
+  analyze: not-run           # reset 2026-08-17 by chg-009 (slot namespace + pool-claim narrowing delta); re-gate before the feat-007 build
   product_global_hash: "sha256:a8932ef5ee1c"
   constitution_hash: "sha256:a045ce0c2437"
 converge:

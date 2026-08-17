@@ -17,7 +17,7 @@ readiness:
   plan:     ready
   tasks:    ready            # phase 16 (chg-011) built and verified 2026-08-17; chg-011 delta folded 2026-08-17
 gate:
-  analyze: pass              # 2026-08-17 re-gate after remediation: B1/B2 closed (B2 residual is a stated MVP cliff); build order 16.4 first; see analyze.md
+  analyze: not-run           # reset 2026-08-17 by chg-012 (warm slots + pool claim delta); re-gate before the feat-007 build
   product_global_hash: "sha256:a8932ef5ee1c"
   constitution_hash: "sha256:a045ce0c2437"
 human_signoff:
