@@ -40,8 +40,10 @@
   environment eligible for teardown is destroyed within one sweep interval of becoming eligible. A
   sweep that cannot complete reports failure visibly rather than exiting successfully.
 - **Privacy / data handling:** skyhook stores only deployment metadata — repository, commit, pull
-  request number, environment identity, state, timestamps, and environment URLs. It does not
-  store, read, or transit application data belonging to a deployed environment.
+  request number, environment identity, state, timestamps, environment URLs, and the values of a
+  repository's declared deploy inputs (artifact references such as an image tag, recorded in the
+  clear; never secrets — the settings that declare them say so where they are declared). It does
+  not store, read, or transit application data belonging to a deployed environment.
 
 ## Product invariants
 - Every environment skyhook has provisioned is represented in the registry.
