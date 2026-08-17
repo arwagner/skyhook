@@ -9,7 +9,13 @@
   deploy copies of it.
 - **Environment** — one deployed copy of a consuming repo's infrastructure, provisioned and owned
   by skyhook.
-- **Ephemeral environment** — an environment whose lifetime is bound to a pull request.
+- **Ephemeral environment** — an environment whose lifetime is bound to a pull request, or a
+  warm slot staged to be claimed by one; both live in the ephemeral namespace.
+- **Warm slot** — an environment skyhook builds ahead of any pull request and holds ready to be
+  claimed by the next one; destroyed and rebuilt fresh after its claimant closes, never handed
+  to a second pull request.
+- **Pool** — the set of a consuming repo's warm slots, maintained to a configured target by the
+  sweep; absent configuration means no pool exists.
 - **Long-running environment** — an environment that persists independently of any pull request.
 - **Protected environment** — an environment marked such that skyhook will not destroy it without
   an explicit human action.
@@ -40,7 +46,9 @@
   environment eligible for teardown is destroyed within one sweep interval of becoming eligible. A
   sweep that cannot complete reports failure visibly rather than exiting successfully.
 - **Privacy / data handling:** skyhook stores only deployment metadata — repository, commit, pull
-  request number, environment identity, state, timestamps, environment URLs, and the values of a
+  request number (including as the claimant recorded on a warm slot: the same datum, held on the
+  slot's record rather than derived from its name), environment identity, state, timestamps,
+  environment URLs, and the values of a
   repository's declared deploy inputs (artifact references such as an image tag, recorded in the
   clear; never secrets — the settings that declare them say so where they are declared). It does
   not store, read, or transit application data belonging to a deployed environment.
