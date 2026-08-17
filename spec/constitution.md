@@ -68,7 +68,7 @@ Deviations are allowed but must be called out explicitly in the plan that introd
   edits skyhook's workflows, or anything else, still runs as a pull request and is still offered
   only the narrower credentials. That is what makes the split worth its complexity, and why it
   does not rest on skyhook's code being careful.
-- **A pull-request run is refused everything outside the ephemeral namespace, with three named
+- **A pull-request run is refused everything outside the ephemeral namespace, with four named
   exceptions.** The credentials a pull request can reach are denied every long-running environment,
   every environment belonging to another repository, every write to any environment's protection
   mark, and anything skyhook did not provision — denied by the cloud, on every request, whether or
@@ -76,8 +76,9 @@ Deviations are allowed but must be called out explicitly in the plan that introd
   adapter may satisfy it however its provider expresses a refusal; what an adapter may not do is
   satisfy it by having skyhook decline to make the call.
   Every refusal above is about what a run may **do** to an environment. To see that an environment
-  exists is not to reach it, and the three exceptions below are the places that distinction is load
-  bearing. All are written down because an unnamed exception is indistinguishable from a leak.
+  exists is not to reach it, and the exceptions below are the places that distinction is load
+  bearing — the first three are reads, and the fourth is the one deliberate write among them.
+  All are written down because an unnamed exception is indistinguishable from a leak.
   **First, a run may learn the names of the environments its own repository holds.** The names and
   nothing else, and only for the repository the run belongs to. A run needs them to find its own
   environment and to count how many exist against the cap, and neither question can be answered one
@@ -101,7 +102,16 @@ Deviations are allowed but must be called out explicitly in the plan that introd
   status of every ephemeral environment its repository holds — and narrowing that to the one
   environment the run claimed is skyhook's own session narrowing, the same guardrail-not-boundary
   that already confines its registry and state reach.
-  Every layer that narrows a run's reach must permit exactly these three things and nothing
+  **Fourth, where a repository has enabled pooling, a run may read the repository's warm-slot
+  records and take one free slot for itself.** A warm slot is an environment built ahead of any
+  pull request and staged inside the ephemeral namespace; the pool's whole point is that any
+  pull request may take any free one, and no narrower grant can answer "which slot is free" or
+  make the taking atomic. The read is of whole slot records; the take is a single conditional
+  write that moves one slot's record from waiting to claimed and names the claiming pull
+  request, and it is the only write this exception grants — building, destroying, and every
+  environment outside the slot namespace stay refused exactly as before. On a repository with
+  pooling off, this exception grants nothing at all.
+  Every layer that narrows a run's reach must permit exactly these four things and nothing
   further. The reason is the same for all: a run holds the intersection of every layer that
   narrows it, so a grant one layer makes that another denies is no grant at all, and an exception
   stated once is an exception that does not work.
@@ -118,6 +128,18 @@ Deviations are allowed but must be called out explicitly in the plan that introd
   nothing about long-running environments' marks, which stay refused outright, and it still
   cannot touch what the mark protects: destruction of a protected environment is refused to the
   run by the mark itself being honored, and the mark's write stays the cloud's to refuse.
+  What the fourth costs, said plainly: before claiming anything, a pull-request run can read
+  every warm slot's record — the commit it was built at, its address, and the recorded values of
+  the repository's declared deploy inputs; deployment metadata, never secrets, but visible to
+  every collaborator's run. And the claimant a run writes is its own report: the conditional
+  write fixes which record and which version may change, not what is written into it, so a run
+  can name a pull request that is not its own — misdirecting slot cleanup at a sibling's
+  preview, or holding a slot under another's name — and a run can loop the claim and seize
+  every free slot. These are collaborator-only abuses, priced by the same reasoning as the
+  preview non-isolation decision below: only a repository collaborator can deploy at all, and a
+  collaborator holds blunter instruments. Pinning the written claimant to the identity the CI
+  host asserted about the run is the enforcement to add before pooling leaves prototype depth,
+  and it is recorded as exactly that.
 - **Preview environments are not isolated from each other, by decision.** Skyhook keeps one pull
   request's run out of another's environment, and narrows each run's credentials to the single
   environment it claimed — but that is a guardrail against accident, not a boundary the cloud
