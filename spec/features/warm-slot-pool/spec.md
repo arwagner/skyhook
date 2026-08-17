@@ -143,9 +143,13 @@ assumption gets a working preview at a new URL and wasted warmth, not a broken o
 - **Scenario: the claimant's pull request closes**
   - Given an `active` slot whose claimant pull request has closed
   - When the close event's teardown runs, or failing that the next scheduled sweep
-  - Then the slot is released and destroyed exactly as an ephemeral environment is today, its
-    record deleted only after verified destruction — and it is never handed to another pull
-    request without that destroy and a fresh build
+  - Then the slot is released and destroyed by the close event as far as a pull-request run
+    can go — infrastructure destroyed, emptiness verified, state deleted — and the record's
+    removal is deliberately left: deleting a slot record is precisely the act AC-11 has the
+    cloud refuse this run, so the record stays `released`, the run reports the deferral and
+    succeeds, and the scheduled sweep removes it within one interval (the bound AC-8 already
+    promises; chg-002, found live). A slot is never handed to another pull request without
+    that removal and a fresh build
   - And given a slot whose claimant's state cannot be determined (a failed lookup), the sweep
     leaves that slot alone and reports it, destroying only on a positive "closed" answer
 

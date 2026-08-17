@@ -421,8 +421,13 @@ test('feat-007/AC-8 a close on a pooled repository finds the slot by claimant an
 
   assert.equal(code, 0);
   assert.equal(destroyer.requests[0]?.identity, 'slot-1');
-  assert.equal(store.rawValue(registryKeyFor('acme/widgets', 'slot-1')), undefined);
+  // The record deliberately STAYS (chg-002, found live): freeing a slot's name is the
+  // cloud's to refuse a pull-request run, so the close path defers to the sweep.
+  const raw = store.rawValue(registryKeyFor('acme/widgets', 'slot-1'));
+  assert.ok(raw !== undefined, 'the released record awaits the sweep');
+  assert.equal((JSON.parse(raw ?? '{}') as { state?: string }).state, 'released');
   assert.match(out.lines.join(' '), /slot-1/);
+  assert.match(out.lines.join(' '), /sweep/);
 });
 
 test('feat-007/AC-8 a failed claimant lookup stops loudly and destroys nothing', async () => {

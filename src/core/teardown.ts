@@ -37,6 +37,14 @@ export interface TeardownPorts {
    * because a marked environment never gets this far (plan D6).
    */
   readonly markerRemoval: 'with-record' | 'record-only';
+  /**
+   * What happens to the record after a verified destroy (feat-007 chg-002, found live).
+   * `remove` — today's ending, delete it and free the name. `defer` — stop on purpose:
+   * deleting a slot record is exactly the act the cloud refuses a pull-request run
+   * (feat-007/AC-11), so the close fast path leaves the released record for the sweep,
+   * whose credentials may delete it, within one interval (AC-8's own bound).
+   */
+  readonly recordRemoval?: 'remove' | 'defer';
 }
 
 export interface TeardownRequest {
@@ -203,6 +211,20 @@ export async function teardownEnvironment(
     };
   }
   if (beforeRemoval !== 'proceed') return beforeRemoval;
+
+  // The deliberate stop (feat-007 chg-002): a pull-request run may not free a slot's
+  // name — the cloud refuses the delete — so the close path defers the removal to the
+  // sweep rather than crashing into that refusal. The destroy above already happened;
+  // the released record is a started teardown the next sweep pass completes.
+  if (ports.recordRemoval === 'defer') {
+    return {
+      kind: 'destroyed',
+      notes: [
+        'the record stays released until the scheduled sweep removes it — freeing a ' +
+          "slot's name is refused to a pull-request run by design (feat-007/AC-11)",
+      ],
+    };
+  }
 
   // Narrow window, consciously accepted at prototype depth (backlog: a conditional
   // delete on the store would close it): a reactivation landing between the re-confirm

@@ -198,7 +198,15 @@ export async function teardown(options: TeardownOptions): Promise<number> {
   }
 
   const result = await teardownEnvironment(
-    { registry, store, destroyer: acquired.destroyer, markerRemoval: 'record-only' },
+    {
+      registry,
+      store,
+      destroyer: acquired.destroyer,
+      markerRemoval: 'record-only',
+      // A pull-request run may not free a slot's name (feat-007/AC-11); the sweep does,
+      // within one interval (chg-002, found live on deadweight pull request #9).
+      ...(pullRequestNumberFor(identity) === null ? { recordRemoval: 'defer' as const } : {}),
+    },
     { repository, identity },
   );
   return report(identity, result, options);

@@ -510,3 +510,41 @@ test('feat-003/AC-15 feat-001/AC-37 a redaction mid-teardown is not a reactivati
   assert.equal(done.kind, 'destroyed', 'a content-only write never reads as a reactivation');
   assert.equal(store.rawValue(registryKeyFor(REPO, ID)), undefined, 'the record is removed');
 });
+
+// --- deferred record removal (feat-007 chg-002, found live) -------------------
+
+test('feat-007/AC-8 a deferred teardown destroys everything it can and leaves the released record', async () => {
+  const store = new FakeStore();
+  const registry = new Registry(store, { now: () => '2026-08-17T00:00:00.000Z' });
+  const claimed = await registry.claim({ repository: REPO, identity: 'slot-1', state: 'warm' });
+  assert.ok(claimed.ok);
+  if (!claimed.ok) return;
+  const built = await registry.update(REPO, 'slot-1', claimed.version, {
+    deployedCommit: 'warm-build',
+    url: 'https://slot-1.example.test',
+  });
+  assert.ok(built.ok);
+  if (!built.ok) return;
+  const taken = await registry.poolClaim(REPO, 'slot-1', 9, built.version);
+  assert.ok(taken.ok);
+  store.seed(`${stateDirFor(REPO, 'slot-1')}terraform.tfstate`, '{"resources":[]}');
+
+  const destroyer = new FakeDestroyer();
+  const result = await teardownEnvironment(
+    { registry, store, destroyer, markerRemoval: 'record-only', recordRemoval: 'defer' },
+    { repository: REPO, identity: 'slot-1' },
+  );
+
+  assert.equal(result.kind, 'destroyed');
+  if (result.kind !== 'destroyed') return;
+  assert.match(result.notes.join(' '), /sweep/);
+  assert.equal(destroyer.called, true, 'the infrastructure was destroyed');
+  assert.deepEqual(
+    store.allKeys().filter((k) => k.startsWith(stateDirFor(REPO, 'slot-1'))),
+    [],
+    'the state was deleted',
+  );
+  const read = await registry.read(REPO, 'slot-1');
+  assert.ok(read.ok && read.record !== null, 'the record stays');
+  if (read.ok && read.record !== null) assert.equal(read.record.state, 'released');
+});
